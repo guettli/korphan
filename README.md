@@ -37,6 +37,13 @@ of these hold:
      "any custom resource is managed") keeps each skip a deliberate decision —
      a hand-applied `Certificate` or `HTTPRoute` that is *not* on the list is
      still reported.
+
+     **Found an operator whose resources should be skipped by default?** If
+     korphan flags custom resources that a well-known operator owns and
+     reconciles (the way liqo owns its peering CRDs), please [open an issue or a
+     PR](https://github.com/guettli/korphan/issues) to add them to the built-in
+     list — see `defaultSkipKinds` in `internal/korphan/classify.go`. That way
+     everyone benefits and you don't have to carry the `--skip-kind` flags.
    - **an operator-domain label** — a core object (Secret, RBAC, Deployment…)
      carrying a **label** whose domain matches an installed operator's API
      group, e.g. liqo stamps `liqo.io/managed` on what it creates. This is
@@ -143,3 +150,9 @@ Flags:
 ## Feedback is welcome
 
 Please create an issue if you have a question or a feature request.
+
+In particular, if korphan reports custom resources that a well-known operator
+owns and reconciles — the way liqo owns its peering CRDs — please [open an issue
+or a PR](https://github.com/guettli/korphan/issues) to add that operator's
+`Group/Kind` tuples to the built-in skip list (`defaultSkipKinds` in
+`internal/korphan/classify.go`), so every user gets them out of the box.
