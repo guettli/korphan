@@ -47,11 +47,14 @@ type Options struct {
 	// know natively).
 	ManagerLabels      []string
 	ManagerAnnotations []string
-	// DetectOperators, when true (the default), treats a resource as managed if
-	// it carries a label/annotation whose domain matches an installed operator's
-	// API group -- catching objects an operator reconciles without an
-	// ownerReference (e.g. liqo peering resources).
+	// DetectOperators, when true (the default), enables operator-ownership
+	// recognition: the Group/Kind skip list (defaultSkipKinds plus SkipKinds)
+	// and the operator-domain label heuristic. Both catch objects an operator
+	// reconciles without an ownerReference (e.g. liqo peering resources).
 	DetectOperators bool
+	// SkipKinds extends the built-in skip list with extra "group/Kind" (or bare
+	// "Kind" for the core group) tuples to treat as operator-owned.
+	SkipKinds []string
 	// Now is the reference time for age calculations (injectable for tests).
 	Now time.Time
 }
@@ -122,8 +125,10 @@ func Scan(ctx context.Context, cfg *rest.Config, opts Options) (*Result, error) 
 	active := activeManagers(res.Managers)
 
 	var opGroups []string
+	var skipKinds map[schema.GroupKind]bool
 	if opts.DetectOperators {
 		opGroups = operatorGroups(lists)
+		skipKinds = buildSkipKinds(opts.SkipKinds)
 	}
 
 	for _, rl := range lists {
@@ -148,7 +153,7 @@ func Scan(ctx context.Context, cfg *rest.Config, opts Options) (*Result, error) 
 			gvr := gv.WithResource(ar.Name)
 			gvk := gv.WithKind(ar.Kind)
 			res.Types++
-			if err := scanResource(ctx, dyn, gvr, gvk, ar.Namespaced, active, opGroups, opts, res); err != nil {
+			if err := scanResource(ctx, dyn, gvr, gvk, ar.Namespaced, active, opGroups, skipKinds, opts, res); err != nil {
 				res.ListWarnings = append(res.ListWarnings,
 					fmt.Sprintf("list %s: %v", gvr.String(), err))
 			}
@@ -169,7 +174,7 @@ func Scan(ctx context.Context, cfg *rest.Config, opts Options) (*Result, error) 
 }
 
 func scanResource(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionResource,
-	gvk schema.GroupVersionKind, namespaced bool, active []Manager, operatorGroups []string, opts Options, res *Result,
+	gvk schema.GroupVersionKind, namespaced bool, active []Manager, operatorGroups []string, skipKinds map[schema.GroupKind]bool, opts Options, res *Result,
 ) error {
 	// A namespace filter restricts to namespaced resources; cluster-scoped ones
 	// are then out of scope. Namespaced resources are listed cluster-wide and
@@ -189,7 +194,7 @@ func scanResource(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVe
 			continue
 		}
 		res.Scanned++
-		managed, tolerated, reason := classify(u, gvk, active, operatorGroups, opts)
+		managed, tolerated, reason := classify(u, gvk, active, operatorGroups, skipKinds, opts)
 		if tolerated {
 			res.Tolerated++
 			continue

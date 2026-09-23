@@ -48,6 +48,7 @@ type flags struct {
 	verbose            bool
 	failOnListErrors   bool
 	detectOperators    bool
+	skipKinds          []string
 }
 
 var f flags
@@ -93,7 +94,8 @@ func init() {
 	pf.StringSliceVar(&f.ignoreNameGlobs, "ignore-name-glob", nil, "Treat any resource whose name matches one of these globs as managed")
 	pf.StringSliceVar(&f.managerLabels, "manager-label", nil, "Extra label keys whose presence marks a resource as managed (for GitOps tools korphan does not know natively)")
 	pf.StringSliceVar(&f.managerAnnotations, "manager-annotation", nil, "Extra annotation keys whose presence marks a resource as managed")
-	pf.BoolVar(&f.detectOperators, "detect-operators", true, "Treat a resource as managed if it carries a label/annotation whose domain matches an installed operator's API group (catches operator-reconciled objects with no ownerReference, e.g. liqo peering resources)")
+	pf.BoolVar(&f.detectOperators, "detect-operators", true, "Recognize operator-owned objects with no ownerReference: the built-in Group/Kind skip list (liqo's CRDs) plus core objects carrying an operator-domain label")
+	pf.StringSliceVar(&f.skipKinds, "skip-kind", nil, "Extra 'group/Kind' tuples to treat as operator-owned, on top of the built-in list (e.g. 'networking.liqo.io/Configuration')")
 	pf.StringVarP(&f.output, "output", "o", "table", "Output format: table or json")
 	pf.BoolVarP(&f.verbose, "verbose", "v", false, "Print the detected managers and scan totals to stderr")
 	pf.BoolVar(&f.failOnListErrors, "fail-on-list-errors", false, "Exit 3 if any resource type could not be listed (e.g. a broken aggregated API)")
@@ -126,6 +128,7 @@ func run(cmd *cobra.Command, _ []string) error {
 		ManagerLabels:      f.managerLabels,
 		ManagerAnnotations: f.managerAnnotations,
 		DetectOperators:    f.detectOperators,
+		SkipKinds:          f.skipKinds,
 	})
 	if err != nil {
 		return err

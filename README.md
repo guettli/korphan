@@ -30,20 +30,24 @@ of these hold:
    tool cannot mask an orphan.
 3. **Reconciled by an operator** — many operators reconcile objects they never
    set an `ownerReference` on (liqo's peering resources are the motivating
-   case). korphan recognizes them **generically**, keying on the operator API
-   groups discovered in the cluster (any non-built-in group) rather than on any
-   specific tool, via two signals:
-   - the resource **is a custom resource** of an installed operator (its own
-     API group is an operator group, e.g. `networking.liqo.io/Configuration`); or
-   - a core object carries a **label** whose domain matches an operator group
-     (e.g. liqo stamps `liqo.io/managed` on the Secrets/RBAC it creates).
+   case). Two signals cover this:
+   - **an explicit `Group/Kind` skip list** — the operator's own custom-resource
+     kinds. korphan ships a built-in list of liqo's CRDs; extend it with
+     `--skip-kind 'group/Kind'`. Listing exact kinds (rather than trusting
+     "any custom resource is managed") keeps each skip a deliberate decision —
+     a hand-applied `Certificate` or `HTTPRoute` that is *not* on the list is
+     still reported.
+   - **an operator-domain label** — a core object (Secret, RBAC, Deployment…)
+     carrying a **label** whose domain matches an installed operator's API
+     group, e.g. liqo stamps `liqo.io/managed` on what it creates. This is
+     keyed generically on the operator groups discovered in the cluster.
 
    **Annotations are deliberately not used**: operators routinely read a
    user-authored annotation off a user-owned object without owning it
    (`cert-manager.io/cluster-issuer` on a hand-made Ingress, metallb/traefik
    config), so keying on annotations would hide real orphans. The
    `kubernetes.io` / `k8s.io` / `helm.sh` convention domains never count.
-   Disable the whole heuristic with `--detect-operators=false`.
+   `--detect-operators=false` turns off both signals (skip list included).
 4. **Control-plane internal** — it belongs to the set the api-server, kubelet,
    or distro create on their own and that no GitOps repo should own: Nodes, the
    `kubernetes` Service/Endpoints, `kube-root-ca.crt`, bootstrap & aggregated
@@ -113,7 +117,7 @@ Usage:
 
 Flags:
       --context string               Name of the kubeconfig context to use
-      --detect-operators             Treat a resource as managed if it carries a label/annotation whose domain matches an installed operator's API group (catches operator-reconciled objects with no ownerReference, e.g. liqo peering resources) (default true)
+      --detect-operators             Recognize operator-owned objects with no ownerReference: the built-in Group/Kind skip list (liqo's CRDs) plus core objects carrying an operator-domain label (default true)
       --exclude-namespace strings    Skip these namespaces (comma-separated globs)
       --fail-on-list-errors          Exit 3 if any resource type could not be listed (e.g. a broken aggregated API)
   -h, --help                         help for korphan
@@ -125,6 +129,7 @@ Flags:
       --max-debug-pod-age duration   Tolerate an ownerless (debug) Pod younger than this; older ones are reported (default 2h0m0s)
   -n, --namespace strings            Restrict to these namespaces (comma-separated globs); cluster-scoped resources are skipped
   -o, --output string                Output format: table or json (default "table")
+      --skip-kind strings            Extra 'group/Kind' tuples to treat as operator-owned, on top of the built-in list (e.g. 'networking.liqo.io/Configuration')
   -v, --verbose                      Print the detected managers and scan totals to stderr
       --version                      version for korphan
 ```

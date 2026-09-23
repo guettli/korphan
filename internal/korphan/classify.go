@@ -1,7 +1,6 @@
 package korphan
 
 import (
-	"slices"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,6 +29,13 @@ const (
 
 	nsDefault      = "default"
 	nameKubernetes = "kubernetes"
+	kindSecret     = "Secret"
+
+	groupLiqoCore    = "core.liqo.io"
+	groupLiqoAuth    = "authentication.liqo.io"
+	groupLiqoIPAM    = "ipam.liqo.io"
+	groupLiqoNet     = "networking.liqo.io"
+	groupLiqoOffload = "offloading.liqo.io"
 )
 
 // neverList names resources that are listable but never orphan-relevant and
@@ -184,6 +190,75 @@ func detectManagers(lists []*metav1.APIResourceList, opts Options) []Manager {
 	return managers
 }
 
+// defaultSkipKinds are Group/Kind tuples treated as operator-owned and skipped
+// by default. Some operators create and reconcile custom resources with no
+// ownerReference and no GitOps stamp -- korphan would otherwise flag them.
+// Listing the exact kinds (rather than trusting "any custom resource is
+// managed") keeps each skip a deliberate, reviewable decision.
+//
+// These are liqo's CRDs: liqo maintains them as cross-cluster peering state.
+// This is the one ecosystem-specific default baked in; extend it with
+// --skip-kind, and the whole operator step (this list included) is gated by
+// --detect-operators.
+var defaultSkipKinds = []schema.GroupKind{
+	{Group: groupLiqoCore, Kind: "ForeignCluster"},
+	{Group: groupLiqoAuth, Kind: "Identity"},
+	{Group: groupLiqoAuth, Kind: "Renew"},
+	{Group: groupLiqoAuth, Kind: "ResourceSlice"},
+	{Group: groupLiqoAuth, Kind: "Tenant"},
+	{Group: groupLiqoIPAM, Kind: "IP"},
+	{Group: groupLiqoIPAM, Kind: "Network"},
+	{Group: groupLiqoNet, Kind: "Configuration"},
+	{Group: groupLiqoNet, Kind: "Connection"},
+	{Group: groupLiqoNet, Kind: "FirewallConfiguration"},
+	{Group: groupLiqoNet, Kind: "GatewayClient"},
+	{Group: groupLiqoNet, Kind: "GatewayServer"},
+	{Group: groupLiqoNet, Kind: "GeneveTunnel"},
+	{Group: groupLiqoNet, Kind: "InternalFabric"},
+	{Group: groupLiqoNet, Kind: "InternalNode"},
+	{Group: groupLiqoNet, Kind: "PublicKey"},
+	{Group: groupLiqoNet, Kind: "RouteConfiguration"},
+	{Group: groupLiqoNet, Kind: "WgGatewayClient"},
+	{Group: groupLiqoNet, Kind: "WgGatewayClientTemplate"},
+	{Group: groupLiqoNet, Kind: "WgGatewayServer"},
+	{Group: groupLiqoNet, Kind: "WgGatewayServerTemplate"},
+	{Group: groupLiqoOffload, Kind: "NamespaceMap"},
+	{Group: groupLiqoOffload, Kind: "NamespaceOffloading"},
+	{Group: groupLiqoOffload, Kind: "Quota"},
+	{Group: groupLiqoOffload, Kind: "ShadowEndpointSlice"},
+	{Group: groupLiqoOffload, Kind: "ShadowPod"},
+	{Group: groupLiqoOffload, Kind: "VirtualNode"},
+	{Group: groupLiqoOffload, Kind: "VkOptionsTemplate"},
+}
+
+// buildSkipKinds merges the baked-in defaults with any user-supplied "group/Kind"
+// (or bare "Kind" for the core group) entries into a lookup set.
+func buildSkipKinds(userSkips []string) map[schema.GroupKind]bool {
+	set := make(map[schema.GroupKind]bool, len(defaultSkipKinds)+len(userSkips))
+	for _, gk := range defaultSkipKinds {
+		set[gk] = true
+	}
+	for _, s := range userSkips {
+		if gk, ok := parseGroupKind(s); ok {
+			set[gk] = true
+		}
+	}
+	return set
+}
+
+// parseGroupKind parses "group/Kind" (or bare "Kind" for the core group) into a
+// GroupKind. A group never contains "/", so a single split is unambiguous.
+func parseGroupKind(s string) (schema.GroupKind, bool) {
+	group, kind, found := strings.Cut(s, "/")
+	if !found {
+		group, kind = "", group // bare "Kind" -> core group
+	}
+	if kind == "" {
+		return schema.GroupKind{}, false
+	}
+	return schema.GroupKind{Group: group, Kind: kind}, true
+}
+
 // operatorGroups returns the API groups that were added to the cluster by an
 // operator or controller -- every discovered group that is not a built-in
 // Kubernetes group. These are the domains that, appearing as a label or
@@ -240,17 +315,10 @@ func domainMatchesGroup(domain, group string) bool {
 		strings.HasSuffix(domain, "."+group)
 }
 
-// managedByOperator reports whether a resource is reconciled by an installed
-// operator, generically and without per-operator special-casing, via two
-// signals:
-//
-//	(a) the resource is itself a custom resource of an installed operator
-//	    (its own GVK group is an operator group) -- e.g. liqo's ForeignCluster,
-//	    ResourceSlice, Configuration. A CR is, by definition, reconciled by the
-//	    controller that owns its CRD.
-//	(b) it is a core/built-in object carrying a LABEL whose domain matches an
-//	    operator group -- e.g. liqo stamps `liqo.io/managed` on the Secrets,
-//	    RBAC and Deployments it creates.
+// managedByOperatorLabel reports the operator domain that owns a core/built-in
+// object, inferred from a LABEL whose domain matches an installed operator's API
+// group -- e.g. liqo stamps `liqo.io/managed` on the Secrets, RBAC and
+// Deployments it creates.
 //
 // Annotations are deliberately NOT used: operators routinely read a
 // user-authored annotation off a user-owned object without owning it
@@ -258,12 +326,11 @@ func domainMatchesGroup(domain, group string) bool {
 // config annotations), and keying on those would hide genuine orphans. Labels
 // in an operator's domain are, in practice, operator-applied ownership markers.
 // The kubernetes.io/k8s.io/helm.sh convention domains never count.
-func managedByOperator(gvk schema.GroupVersionKind, labels map[string]string, groups []string) (string, bool) {
-	// (a) The object is a custom resource of an installed operator.
-	if gvk.Group != "" && slices.Contains(groups, gvk.Group) {
-		return "operator resource (" + gvk.Group + ")", true
-	}
-	// (b) A label in an operator's domain marks operator ownership.
+//
+// An operator's custom *resources* (its own CRD kinds) are handled separately
+// by the explicit skip list (see defaultSkipKinds), not here -- so a
+// hand-applied CR that is not on the list is still reported.
+func managedByOperatorLabel(labels map[string]string, groups []string) (string, bool) {
 	for key := range labels {
 		domain := keyDomain(key)
 		if domain == "" || !strings.Contains(domain, ".") || conventionDomain(domain) {
@@ -271,7 +338,7 @@ func managedByOperator(gvk schema.GroupVersionKind, labels map[string]string, gr
 		}
 		for _, g := range groups {
 			if domainMatchesGroup(domain, g) {
-				return "managed by operator (" + domain + ")", true
+				return domain, true
 			}
 		}
 	}
@@ -297,7 +364,7 @@ func activeManagers(managers []Manager) []Manager {
 //     (counted separately, neither managed nor an orphan).
 //   - reason:    a human-readable classification, shown for orphans (why it is
 //     flagged) and, in verbose mode, for managed resources (why it is not).
-func classify(u *unstructured.Unstructured, gvk schema.GroupVersionKind, active []Manager, operatorGroups []string, opts Options) (managed, tolerated bool, reason string) {
+func classify(u *unstructured.Unstructured, gvk schema.GroupVersionKind, active []Manager, operatorGroups []string, skipKinds map[schema.GroupKind]bool, opts Options) (managed, tolerated bool, reason string) {
 	// 1. Owned by another resource (controller or plain owner reference).
 	if refs := u.GetOwnerReferences(); len(refs) > 0 {
 		owner := refs[0]
@@ -316,14 +383,16 @@ func classify(u *unstructured.Unstructured, gvk schema.GroupVersionKind, active 
 		return true, false, r
 	}
 
-	// 4. Reconciled by an installed operator (a custom resource of that
-	// operator, or a core object it stamped with a label in its domain) -- e.g.
-	// liqo's peering resources, which carry no ownerReference. Generic: keys on
-	// the discovered operator groups, never on a specific tool. Runs after the
+	// 4. Operator-owned, either explicitly (a Kind on the skip list, e.g. liqo's
+	// peering CRDs) or by an operator-domain label an operator stamped on a core
+	// object it created. Both carry no ownerReference. Runs after the
 	// kube-internal check so control-plane objects keep their precise reason.
+	if skipKinds[gvk.GroupKind()] {
+		return true, false, "skipped operator kind (" + gvk.Group + "/" + gvk.Kind + ")"
+	}
 	if len(operatorGroups) > 0 {
-		if r, ok := managedByOperator(gvk, labels, operatorGroups); ok {
-			return true, false, r
+		if domain, ok := managedByOperatorLabel(labels, operatorGroups); ok {
+			return true, false, "managed by operator (" + domain + ")"
 		}
 	}
 
@@ -460,7 +529,7 @@ func seededInternal(u *unstructured.Unstructured, gvk schema.GroupVersionKind) (
 	// offloaded namespaces with a remote-cluster suffix, so match by prefix.
 	case kind == "ConfigMap" && strings.HasPrefix(name, "kube-root-ca.crt"):
 		return "root CA ConfigMap", true
-	case kind == "Secret" && strings.HasPrefix(name, "sh.helm.release.v1."):
+	case kind == kindSecret && strings.HasPrefix(name, "sh.helm.release.v1."):
 		return "helm release storage", true
 	case kind == "ServiceAccount" && name == nsDefault:
 		return "default ServiceAccount", true

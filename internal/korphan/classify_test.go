@@ -206,12 +206,22 @@ func TestClassify(t *testing.T) {
 			managed: false,
 		},
 		{
-			name:    "liqo CR recognized via its own operator group (no labels)",
+			name:    "liqo CR recognized via the baked-in skip list (no labels)",
 			u:       obj("ForeignCluster", "", "hcloud"),
 			gvk:     gvkOf("core.liqo.io", "v1beta1", "ForeignCluster"),
 			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now, DetectOperators: true},
 			active:  nil,
 			managed: true,
+		},
+		{
+			// A custom resource NOT on the skip list and without an operator
+			// label is a real orphan -- the explicit list is deliberate, we do
+			// not blanket-trust every CR.
+			name:    "hand-applied cert-manager Certificate (not on skip list) stays orphan",
+			u:       obj("Certificate", "app", "web"),
+			gvk:     gvkOf("cert-manager.io", "v1", "Certificate"),
+			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now, DetectOperators: true},
+			managed: false,
 		},
 		{
 			name:    "liqo CR recognized via operator-group label domain",
@@ -299,12 +309,16 @@ func TestClassify(t *testing.T) {
 			if o.MaxDebugPodAge == 0 && o.Now.IsZero() {
 				o = opts
 			}
-			// Mirror Scan: operator groups are only supplied when detection is on.
+			// Mirror Scan: operator groups and the skip list are only supplied
+			// when detection is on.
 			og := opGroups
-			if !o.DetectOperators {
+			var sk map[schema.GroupKind]bool
+			if o.DetectOperators {
+				sk = buildSkipKinds(nil)
+			} else {
 				og = nil
 			}
-			managed, tolerated, reason := classify(tc.u, tc.gvk, tc.active, og, o)
+			managed, tolerated, reason := classify(tc.u, tc.gvk, tc.active, og, sk, o)
 			if managed != tc.managed {
 				t.Errorf("managed = %v, want %v (reason %q)", managed, tc.managed, reason)
 			}
@@ -358,33 +372,49 @@ func TestOperatorGroups(t *testing.T) {
 	}
 }
 
-func TestManagedByOperator(t *testing.T) {
+func TestManagedByOperatorLabel(t *testing.T) {
 	groups := []string{"networking.liqo.io", "offloading.liqo.io", "core.liqo.io", "cert-manager.io"}
-	core := gvkOf("", "v1", "Secret") // core object, not a CR
-	liqoCR := gvkOf("core.liqo.io", "v1beta1", "ForeignCluster")
 	cases := []struct {
 		name   string
-		gvk    schema.GroupVersionKind
 		labels map[string]string
 		want   bool
 	}{
-		{"custom resource of an operator group (no labels)", liqoCR, nil, true},
-		{"core object, parent domain liqo.io label matches subgroup", core, map[string]string{"liqo.io/remote-cluster-id": "x"}, true},
-		{"core object, exact subgroup domain label", core, map[string]string{"offloading.liqo.io/origin": "y"}, true},
-		{"kubernetes.io convention label never matches", core, map[string]string{"kubernetes.io/legacy-token-last-used": "d"}, false},
-		{"app.kubernetes.io convention label never matches", core, map[string]string{"app.kubernetes.io/managed-by": "liqo"}, false},
-		{"unprefixed label key never matches", core, map[string]string{"name": "liqo"}, false},
-		{"single-token domain 'io' never over-matches", core, map[string]string{"io/foo": "bar"}, false},
-		{"unrelated operator domain label", core, map[string]string{"traefik.io/router": "r"}, false},
-		{"core object with no operator label", core, map[string]string{"app": "web"}, false},
+		{"parent domain liqo.io label matches subgroup", map[string]string{"liqo.io/remote-cluster-id": "x"}, true},
+		{"exact subgroup domain label", map[string]string{"offloading.liqo.io/origin": "y"}, true},
+		{"kubernetes.io convention label never matches", map[string]string{"kubernetes.io/legacy-token-last-used": "d"}, false},
+		{"app.kubernetes.io convention label never matches", map[string]string{"app.kubernetes.io/managed-by": "liqo"}, false},
+		{"unprefixed label key never matches", map[string]string{"name": "liqo"}, false},
+		{"single-token domain 'io' never over-matches", map[string]string{"io/foo": "bar"}, false},
+		{"unrelated operator domain label", map[string]string{"traefik.io/router": "r"}, false},
+		{"no operator label", map[string]string{"app": "web"}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, ok := managedByOperator(c.gvk, c.labels, groups)
+			_, ok := managedByOperatorLabel(c.labels, groups)
 			if ok != c.want {
-				t.Errorf("managedByOperator = %v, want %v", ok, c.want)
+				t.Errorf("managedByOperatorLabel = %v, want %v", ok, c.want)
 			}
 		})
+	}
+}
+
+func TestBuildSkipKinds(t *testing.T) {
+	set := buildSkipKinds([]string{"example.com/Widget", "Secret"})
+	// Baked-in liqo default present.
+	if !set[schema.GroupKind{Group: "core.liqo.io", Kind: "ForeignCluster"}] {
+		t.Error("default liqo ForeignCluster missing from skip set")
+	}
+	// User group/Kind parsed.
+	if !set[schema.GroupKind{Group: "example.com", Kind: "Widget"}] {
+		t.Error("user group/Kind not added")
+	}
+	// Bare "Kind" maps to the core group.
+	if !set[schema.GroupKind{Group: "", Kind: "Secret"}] {
+		t.Error("bare Kind not mapped to core group")
+	}
+	// A kind not listed is absent.
+	if set[schema.GroupKind{Group: "cert-manager.io", Kind: "Certificate"}] {
+		t.Error("cert-manager Certificate should not be on the default skip list")
 	}
 }
 
