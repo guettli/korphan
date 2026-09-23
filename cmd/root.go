@@ -47,6 +47,7 @@ type flags struct {
 	output             string
 	verbose            bool
 	failOnListErrors   bool
+	detectOperators    bool
 }
 
 var f flags
@@ -92,6 +93,7 @@ func init() {
 	pf.StringSliceVar(&f.ignoreNameGlobs, "ignore-name-glob", nil, "Treat any resource whose name matches one of these globs as managed")
 	pf.StringSliceVar(&f.managerLabels, "manager-label", nil, "Extra label keys whose presence marks a resource as managed (for GitOps tools korphan does not know natively)")
 	pf.StringSliceVar(&f.managerAnnotations, "manager-annotation", nil, "Extra annotation keys whose presence marks a resource as managed")
+	pf.BoolVar(&f.detectOperators, "detect-operators", true, "Treat a resource as managed if it carries a label/annotation whose domain matches an installed operator's API group (catches operator-reconciled objects with no ownerReference, e.g. liqo peering resources)")
 	pf.StringVarP(&f.output, "output", "o", "table", "Output format: table or json")
 	pf.BoolVarP(&f.verbose, "verbose", "v", false, "Print the detected managers and scan totals to stderr")
 	pf.BoolVar(&f.failOnListErrors, "fail-on-list-errors", false, "Exit 3 if any resource type could not be listed (e.g. a broken aggregated API)")
@@ -123,6 +125,7 @@ func run(cmd *cobra.Command, _ []string) error {
 		IgnoreNameGlobs:    f.ignoreNameGlobs,
 		ManagerLabels:      f.managerLabels,
 		ManagerAnnotations: f.managerAnnotations,
+		DetectOperators:    f.detectOperators,
 	})
 	if err != nil {
 		return err

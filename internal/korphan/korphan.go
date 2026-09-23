@@ -47,6 +47,11 @@ type Options struct {
 	// know natively).
 	ManagerLabels      []string
 	ManagerAnnotations []string
+	// DetectOperators, when true (the default), treats a resource as managed if
+	// it carries a label/annotation whose domain matches an installed operator's
+	// API group -- catching objects an operator reconciles without an
+	// ownerReference (e.g. liqo peering resources).
+	DetectOperators bool
 	// Now is the reference time for age calculations (injectable for tests).
 	Now time.Time
 }
@@ -116,6 +121,11 @@ func Scan(ctx context.Context, cfg *rest.Config, opts Options) (*Result, error) 
 	res.Managers = detectManagers(lists, opts)
 	active := activeManagers(res.Managers)
 
+	var opGroups []string
+	if opts.DetectOperators {
+		opGroups = operatorGroups(lists)
+	}
+
 	for _, rl := range lists {
 		if rl == nil {
 			continue
@@ -138,7 +148,7 @@ func Scan(ctx context.Context, cfg *rest.Config, opts Options) (*Result, error) 
 			gvr := gv.WithResource(ar.Name)
 			gvk := gv.WithKind(ar.Kind)
 			res.Types++
-			if err := scanResource(ctx, dyn, gvr, gvk, ar.Namespaced, active, opts, res); err != nil {
+			if err := scanResource(ctx, dyn, gvr, gvk, ar.Namespaced, active, opGroups, opts, res); err != nil {
 				res.ListWarnings = append(res.ListWarnings,
 					fmt.Sprintf("list %s: %v", gvr.String(), err))
 			}
@@ -159,7 +169,7 @@ func Scan(ctx context.Context, cfg *rest.Config, opts Options) (*Result, error) 
 }
 
 func scanResource(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionResource,
-	gvk schema.GroupVersionKind, namespaced bool, active []Manager, opts Options, res *Result,
+	gvk schema.GroupVersionKind, namespaced bool, active []Manager, operatorGroups []string, opts Options, res *Result,
 ) error {
 	// A namespace filter restricts to namespaced resources; cluster-scoped ones
 	// are then out of scope. Namespaced resources are listed cluster-wide and
@@ -179,7 +189,7 @@ func scanResource(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVe
 			continue
 		}
 		res.Scanned++
-		managed, tolerated, reason := classify(u, gvk, active, opts)
+		managed, tolerated, reason := classify(u, gvk, active, operatorGroups, opts)
 		if tolerated {
 			res.Tolerated++
 			continue

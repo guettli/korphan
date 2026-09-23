@@ -28,7 +28,23 @@ of these hold:
    A built-in GitOps tool's labels only count when that tool is actually
    **detected** in the cluster, so a stale label left behind by an uninstalled
    tool cannot mask an orphan.
-3. **Control-plane internal** — it belongs to the set the api-server, kubelet,
+3. **Reconciled by an operator** — many operators reconcile objects they never
+   set an `ownerReference` on (liqo's peering resources are the motivating
+   case). korphan recognizes them **generically**, keying on the operator API
+   groups discovered in the cluster (any non-built-in group) rather than on any
+   specific tool, via two signals:
+   - the resource **is a custom resource** of an installed operator (its own
+     API group is an operator group, e.g. `networking.liqo.io/Configuration`); or
+   - a core object carries a **label** whose domain matches an operator group
+     (e.g. liqo stamps `liqo.io/managed` on the Secrets/RBAC it creates).
+
+   **Annotations are deliberately not used**: operators routinely read a
+   user-authored annotation off a user-owned object without owning it
+   (`cert-manager.io/cluster-issuer` on a hand-made Ingress, metallb/traefik
+   config), so keying on annotations would hide real orphans. The
+   `kubernetes.io` / `k8s.io` / `helm.sh` convention domains never count.
+   Disable the whole heuristic with `--detect-operators=false`.
+4. **Control-plane internal** — it belongs to the set the api-server, kubelet,
    or distro create on their own and that no GitOps repo should own: Nodes, the
    `kubernetes` Service/Endpoints, `kube-root-ca.crt`, bootstrap & aggregated
    RBAC, API-server IP allocation (`IPAddress`, `ServiceCIDR`), coordination
@@ -97,6 +113,7 @@ Usage:
 
 Flags:
       --context string               Name of the kubeconfig context to use
+      --detect-operators             Treat a resource as managed if it carries a label/annotation whose domain matches an installed operator's API group (catches operator-reconciled objects with no ownerReference, e.g. liqo peering resources) (default true)
       --exclude-namespace strings    Skip these namespaces (comma-separated globs)
       --fail-on-list-errors          Exit 3 if any resource type could not be listed (e.g. a broken aggregated API)
   -h, --help                         help for korphan

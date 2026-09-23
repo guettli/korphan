@@ -54,6 +54,11 @@ var fluxActive = []Manager{{Name: "flux", Detected: true, Labels: []string{"kust
 func TestClassify(t *testing.T) {
 	opts := Options{MaxDebugPodAge: 2 * time.Hour, Now: now}
 
+	// operatorGroups is populated for every case so the operator-detection step
+	// runs; cases that expect no operator match simply carry no matching label
+	// or CR group.
+	opGroups := []string{"networking.liqo.io", "offloading.liqo.io", "authentication.liqo.io", "core.liqo.io", "cert-manager.io"}
+
 	tests := []struct {
 		name      string
 		u         *unstructured.Unstructured
@@ -188,9 +193,62 @@ func TestClassify(t *testing.T) {
 			managed: true,
 		},
 		{
+			name:    "cert-manager issued TLS Secret is managed",
+			u:       obj("Secret", "app", "web-tls", withAnnotations(map[string]string{"cert-manager.io/certificate-name": "web"})),
+			gvk:     gvkOf("", "v1", "Secret"),
+			active:  []Manager{{Name: "cert-manager", Detected: true, Annotations: []string{"cert-manager.io/certificate-name"}}},
+			managed: true,
+		},
+		{
 			name:    "liqo Configuration is a real orphan",
 			u:       obj("Configuration", "liqo-tenant-x", "cluster", withLabels(map[string]string{"liqo.io/remote-cluster-id": "x"})),
 			gvk:     gvkOf("networking.liqo.io", "v1beta1", "Configuration"),
+			managed: false,
+		},
+		{
+			name:    "liqo CR recognized via its own operator group (no labels)",
+			u:       obj("ForeignCluster", "", "hcloud"),
+			gvk:     gvkOf("core.liqo.io", "v1beta1", "ForeignCluster"),
+			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now, DetectOperators: true},
+			active:  nil,
+			managed: true,
+		},
+		{
+			name:    "liqo CR recognized via operator-group label domain",
+			u:       obj("Configuration", "liqo-tenant-x", "cluster", withLabels(map[string]string{"liqo.io/remote-cluster-id": "x"})),
+			gvk:     gvkOf("networking.liqo.io", "v1beta1", "Configuration"),
+			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now, DetectOperators: true},
+			active:  nil,
+			managed: true,
+		},
+		{
+			// The dangerous direction: a hand-made object that merely carries an
+			// operator's CONSUMER annotation must NOT be suppressed.
+			name:    "hand-made Ingress with cert-manager consumer annotation stays orphan",
+			u:       obj("Ingress", "app", "web", withAnnotations(map[string]string{"cert-manager.io/cluster-issuer": "letsencrypt"})),
+			gvk:     gvkOf("networking.k8s.io", "v1", "Ingress"),
+			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now, DetectOperators: true},
+			managed: false,
+		},
+		{
+			name:    "liqo-reflected Secret recognized via offloading.liqo.io label",
+			u:       obj("Secret", "app", "reflected", withLabels(map[string]string{"offloading.liqo.io/origin": "hcloud"})),
+			gvk:     gvkOf("", "v1", "Secret"),
+			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now, DetectOperators: true},
+			managed: true,
+		},
+		{
+			name:    "hand-created Secret with only kubernetes.io label stays orphan",
+			u:       obj("Secret", "app", "hand-made", withLabels(map[string]string{"kubernetes.io/legacy-token-last-used": "2026-09-22"})),
+			gvk:     gvkOf("", "v1", "Secret"),
+			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now, DetectOperators: true},
+			managed: false,
+		},
+		{
+			name:    "operator detection disabled leaves liqo CR as orphan",
+			u:       obj("Configuration", "liqo-tenant-x", "cluster", withLabels(map[string]string{"liqo.io/remote-cluster-id": "x"})),
+			gvk:     gvkOf("networking.liqo.io", "v1beta1", "Configuration"),
+			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now, DetectOperators: false},
 			managed: false,
 		},
 		{
@@ -241,7 +299,12 @@ func TestClassify(t *testing.T) {
 			if o.MaxDebugPodAge == 0 && o.Now.IsZero() {
 				o = opts
 			}
-			managed, tolerated, reason := classify(tc.u, tc.gvk, tc.active, o)
+			// Mirror Scan: operator groups are only supplied when detection is on.
+			og := opGroups
+			if !o.DetectOperators {
+				og = nil
+			}
+			managed, tolerated, reason := classify(tc.u, tc.gvk, tc.active, og, o)
 			if managed != tc.managed {
 				t.Errorf("managed = %v, want %v (reason %q)", managed, tc.managed, reason)
 			}
@@ -271,6 +334,57 @@ func TestDetectManagers(t *testing.T) {
 	}
 	if got["fleet"] {
 		t.Error("fleet should not be detected")
+	}
+}
+
+func TestOperatorGroups(t *testing.T) {
+	lists := []*metav1.APIResourceList{
+		{GroupVersion: "v1"},                         // builtin core
+		{GroupVersion: "apps/v1"},                    // builtin
+		{GroupVersion: "networking.k8s.io/v1"},       // builtin
+		{GroupVersion: "metrics.k8s.io/v1beta1"},     // builtin (aggregated)
+		{GroupVersion: "networking.liqo.io/v1beta1"}, // operator
+		{GroupVersion: "cert-manager.io/v1"},         // operator
+	}
+	got := operatorGroups(lists)
+	want := map[string]bool{"networking.liqo.io": true, "cert-manager.io": true}
+	if len(got) != len(want) {
+		t.Fatalf("operatorGroups = %v, want keys %v", got, want)
+	}
+	for _, g := range got {
+		if !want[g] {
+			t.Errorf("unexpected operator group %q (builtin leaked through?)", g)
+		}
+	}
+}
+
+func TestManagedByOperator(t *testing.T) {
+	groups := []string{"networking.liqo.io", "offloading.liqo.io", "core.liqo.io", "cert-manager.io"}
+	core := gvkOf("", "v1", "Secret") // core object, not a CR
+	liqoCR := gvkOf("core.liqo.io", "v1beta1", "ForeignCluster")
+	cases := []struct {
+		name   string
+		gvk    schema.GroupVersionKind
+		labels map[string]string
+		want   bool
+	}{
+		{"custom resource of an operator group (no labels)", liqoCR, nil, true},
+		{"core object, parent domain liqo.io label matches subgroup", core, map[string]string{"liqo.io/remote-cluster-id": "x"}, true},
+		{"core object, exact subgroup domain label", core, map[string]string{"offloading.liqo.io/origin": "y"}, true},
+		{"kubernetes.io convention label never matches", core, map[string]string{"kubernetes.io/legacy-token-last-used": "d"}, false},
+		{"app.kubernetes.io convention label never matches", core, map[string]string{"app.kubernetes.io/managed-by": "liqo"}, false},
+		{"unprefixed label key never matches", core, map[string]string{"name": "liqo"}, false},
+		{"single-token domain 'io' never over-matches", core, map[string]string{"io/foo": "bar"}, false},
+		{"unrelated operator domain label", core, map[string]string{"traefik.io/router": "r"}, false},
+		{"core object with no operator label", core, map[string]string{"app": "web"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, ok := managedByOperator(c.gvk, c.labels, groups)
+			if ok != c.want {
+				t.Errorf("managedByOperator = %v, want %v", ok, c.want)
+			}
+		})
 	}
 }
 

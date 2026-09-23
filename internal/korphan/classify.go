@@ -1,6 +1,7 @@
 package korphan
 
 import (
+	"slices"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,13 +18,15 @@ const (
 	labelFleetBundle   = "fleet.cattle.io/bundle-name"
 	annoHelmRelease    = "meta.helm.sh/release-name"
 	labelObjectsetHash = "objectset.rio.cattle.io/hash"
+	annoCertManager    = "cert-manager.io/certificate-name"
 
-	managerFlux      = "flux"
-	managerArgo      = "argocd"
-	managerFleet     = "fleet"
-	managerHelm      = "helm"
-	managerObjectset = "objectset"
-	managerCustom    = "custom"
+	managerFlux        = "flux"
+	managerArgo        = "argocd"
+	managerFleet       = "fleet"
+	managerHelm        = "helm"
+	managerObjectset   = "objectset"
+	managerCertManager = "cert-manager"
+	managerCustom      = "custom"
 
 	nsDefault      = "default"
 	nameKubernetes = "kubernetes"
@@ -41,6 +44,40 @@ var neverList = map[string]bool{
 // neither owned nor GitOps-managed.
 var neverListGroup = map[string]bool{
 	"metrics.k8s.io": true, // PodMetrics / NodeMetrics from metrics-server
+}
+
+// builtinAPIGroups are the API groups that ship with Kubernetes itself. Every
+// other group discovered in the cluster was added by an operator/controller
+// (via a CRD or an aggregated API server), which is what operatorGroups keys
+// on. Keep this in sync with upstream group registrations.
+var builtinAPIGroups = map[string]bool{
+	"":                             true, // core/v1
+	"apps":                         true,
+	"batch":                        true,
+	"autoscaling":                  true,
+	"policy":                       true,
+	"extensions":                   true,
+	"admissionregistration.k8s.io": true,
+	"apiextensions.k8s.io":         true,
+	"apiregistration.k8s.io":       true,
+	"apidiscovery.k8s.io":          true,
+	"authentication.k8s.io":        true,
+	"authorization.k8s.io":         true,
+	"certificates.k8s.io":          true,
+	"coordination.k8s.io":          true,
+	"discovery.k8s.io":             true,
+	"events.k8s.io":                true,
+	"flowcontrol.apiserver.k8s.io": true,
+	"internal.apiserver.k8s.io":    true,
+	"networking.k8s.io":            true,
+	"node.k8s.io":                  true,
+	"rbac.authorization.k8s.io":    true,
+	"scheduling.k8s.io":            true,
+	"storage.k8s.io":               true,
+	"storagemigration.k8s.io":      true,
+	"resource.k8s.io":              true,
+	"metrics.k8s.io":               true,
+	"admission.k8s.io":             true,
 }
 
 // systemNamespaces are the control-plane's own namespaces. Unstamped, unowned
@@ -96,6 +133,14 @@ var signatures = []managerSignature{
 		detect:      func(map[string]bool) bool { return true },
 	},
 	{
+		// cert-manager issues TLS Secrets from a Certificate but, by default,
+		// sets no ownerReference on them; the Certificate controller reconciles
+		// them via this annotation. Honor it when cert-manager is installed.
+		name:        managerCertManager,
+		annotations: []string{annoCertManager},
+		detect:      func(g map[string]bool) bool { return g["cert-manager.io"] },
+	},
+	{
 		// Anything applied by a Rancher/Wrangler "apply" controller -- the k3s
 		// deploy controller (Addons), the k3s helm-controller, Fleet -- carries
 		// this hash label and is actively reconciled and pruned by that
@@ -139,6 +184,100 @@ func detectManagers(lists []*metav1.APIResourceList, opts Options) []Manager {
 	return managers
 }
 
+// operatorGroups returns the API groups that were added to the cluster by an
+// operator or controller -- every discovered group that is not a built-in
+// Kubernetes group. These are the domains that, appearing as a label or
+// annotation key, mark a resource as reconciled by that operator.
+func operatorGroups(lists []*metav1.APIResourceList) []string {
+	seen := map[string]bool{}
+	var groups []string
+	for _, rl := range lists {
+		if rl == nil {
+			continue
+		}
+		gv, err := schema.ParseGroupVersion(rl.GroupVersion)
+		if err != nil || gv.Group == "" || builtinAPIGroups[gv.Group] || seen[gv.Group] {
+			continue
+		}
+		seen[gv.Group] = true
+		groups = append(groups, gv.Group)
+	}
+	return groups
+}
+
+// conventionDomain reports whether a label/annotation key domain is a
+// Kubernetes-wide convention (kubernetes.io, k8s.io, helm.sh families) rather
+// than an operator-ownership signal. Such keys appear on hand-created resources
+// too, so they must never mark a resource as operator-managed.
+func conventionDomain(domain string) bool {
+	switch {
+	case domain == "kubernetes.io" || strings.HasSuffix(domain, ".kubernetes.io"):
+		return true
+	case domain == "k8s.io" || strings.HasSuffix(domain, ".k8s.io"):
+		return true
+	case domain == "helm.sh" || strings.HasSuffix(domain, ".helm.sh"):
+		return true
+	}
+	return false
+}
+
+// keyDomain returns the domain part of a label/annotation key ("liqo.io" for
+// "liqo.io/remote-cluster-id"), or "" for an unprefixed key.
+func keyDomain(key string) string {
+	if domain, _, found := strings.Cut(key, "/"); found {
+		return domain
+	}
+	return ""
+}
+
+// domainMatchesGroup reports whether a key domain belongs to an operator group,
+// treating parent and child domains as a match: the label "liqo.io/x" (domain
+// "liqo.io") belongs to the operator whose CRD group is "networking.liqo.io",
+// and vice versa.
+func domainMatchesGroup(domain, group string) bool {
+	return domain == group ||
+		strings.HasSuffix(group, "."+domain) ||
+		strings.HasSuffix(domain, "."+group)
+}
+
+// managedByOperator reports whether a resource is reconciled by an installed
+// operator, generically and without per-operator special-casing, via two
+// signals:
+//
+//	(a) the resource is itself a custom resource of an installed operator
+//	    (its own GVK group is an operator group) -- e.g. liqo's ForeignCluster,
+//	    ResourceSlice, Configuration. A CR is, by definition, reconciled by the
+//	    controller that owns its CRD.
+//	(b) it is a core/built-in object carrying a LABEL whose domain matches an
+//	    operator group -- e.g. liqo stamps `liqo.io/managed` on the Secrets,
+//	    RBAC and Deployments it creates.
+//
+// Annotations are deliberately NOT used: operators routinely read a
+// user-authored annotation off a user-owned object without owning it
+// (`cert-manager.io/cluster-issuer` on a hand-made Ingress, metallb/traefik
+// config annotations), and keying on those would hide genuine orphans. Labels
+// in an operator's domain are, in practice, operator-applied ownership markers.
+// The kubernetes.io/k8s.io/helm.sh convention domains never count.
+func managedByOperator(gvk schema.GroupVersionKind, labels map[string]string, groups []string) (string, bool) {
+	// (a) The object is a custom resource of an installed operator.
+	if gvk.Group != "" && slices.Contains(groups, gvk.Group) {
+		return "operator resource (" + gvk.Group + ")", true
+	}
+	// (b) A label in an operator's domain marks operator ownership.
+	for key := range labels {
+		domain := keyDomain(key)
+		if domain == "" || !strings.Contains(domain, ".") || conventionDomain(domain) {
+			continue
+		}
+		for _, g := range groups {
+			if domainMatchesGroup(domain, g) {
+				return "managed by operator (" + domain + ")", true
+			}
+		}
+	}
+	return "", false
+}
+
 // activeManagers keeps only the detected managers, so a stale label left behind
 // by an uninstalled tool cannot mask an orphan.
 func activeManagers(managers []Manager) []Manager {
@@ -158,15 +297,17 @@ func activeManagers(managers []Manager) []Manager {
 //     (counted separately, neither managed nor an orphan).
 //   - reason:    a human-readable classification, shown for orphans (why it is
 //     flagged) and, in verbose mode, for managed resources (why it is not).
-func classify(u *unstructured.Unstructured, gvk schema.GroupVersionKind, active []Manager, opts Options) (managed, tolerated bool, reason string) {
+func classify(u *unstructured.Unstructured, gvk schema.GroupVersionKind, active []Manager, operatorGroups []string, opts Options) (managed, tolerated bool, reason string) {
 	// 1. Owned by another resource (controller or plain owner reference).
 	if refs := u.GetOwnerReferences(); len(refs) > 0 {
 		owner := refs[0]
 		return true, false, "owned by " + owner.Kind + "/" + owner.Name
 	}
 
+	labels, annos := u.GetLabels(), u.GetAnnotations()
+
 	// 2. Claimed by a detected GitOps manager.
-	if m, ok := managedByManager(u.GetLabels(), u.GetAnnotations(), active); ok {
+	if m, ok := managedByManager(labels, annos, active); ok {
 		return true, false, "managed by " + m
 	}
 
@@ -175,7 +316,18 @@ func classify(u *unstructured.Unstructured, gvk schema.GroupVersionKind, active 
 		return true, false, r
 	}
 
-	// 4. User-supplied ignore rules.
+	// 4. Reconciled by an installed operator (a custom resource of that
+	// operator, or a core object it stamped with a label in its domain) -- e.g.
+	// liqo's peering resources, which carry no ownerReference. Generic: keys on
+	// the discovered operator groups, never on a specific tool. Runs after the
+	// kube-internal check so control-plane objects keep their precise reason.
+	if len(operatorGroups) > 0 {
+		if r, ok := managedByOperator(gvk, labels, operatorGroups); ok {
+			return true, false, r
+		}
+	}
+
+	// 5. User-supplied ignore rules.
 	for _, ik := range opts.IgnoreKinds {
 		if strings.EqualFold(ik, gvk.Kind) {
 			return true, false, "ignored kind"
@@ -185,7 +337,7 @@ func classify(u *unstructured.Unstructured, gvk schema.GroupVersionKind, active 
 		return true, false, "ignored name"
 	}
 
-	// 5. Bare debug Pods within their grace age are tolerated.
+	// 6. Bare debug Pods within their grace age are tolerated.
 	if gvk.Kind == "Pod" && gvk.Group == "" {
 		age := opts.Now.Sub(u.GetCreationTimestamp().Time)
 		if age < opts.MaxDebugPodAge {
