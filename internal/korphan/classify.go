@@ -230,6 +230,19 @@ var defaultSkipKinds = []schema.GroupKind{
 	{Group: groupLiqoOffload, Kind: "VkOptionsTemplate"},
 }
 
+// operatorStateLabels identify per-operator runtime-state objects (core kinds
+// like ConfigMaps) that carry no ownerReference and no operator-group label, but
+// that an operator owns and regenerates -- telemetry identities, meta/status
+// objects. They can't go on the Group/Kind skip list (that would skip every
+// ConfigMap) and can't be matched by name (too fragile), so they are matched by
+// a distinctive operator label: key alone (any value), or key=value when the key
+// itself is generic. This is per-operator special-casing, kept deliberately
+// small; add an entry via PR when a common operator's runtime object shows up.
+var operatorStateLabels = []struct{ key, value string }{
+	{"reloader.stakater.com/meta-info", ""},                     // Stakater Reloader meta-info ConfigMap
+	{"app.kubernetes.io/name", "clusterid-telemetry-configmap"}, // liqo telemetry-identity ConfigMap
+}
+
 // buildSkipKinds merges the baked-in defaults with any user-supplied "group/Kind"
 // (or bare "Kind" for the core group) entries into a lookup set.
 func buildSkipKinds(userSkips []string) map[schema.GroupKind]bool {
@@ -440,6 +453,11 @@ func operatorOwned(u *unstructured.Unstructured, gvk schema.GroupVersionKind, la
 	}
 	if mb := labels["app.kubernetes.io/managed-by"]; strings.HasPrefix(mb, "cert-manager") {
 		return "cert-manager runtime", true
+	}
+	for _, sl := range operatorStateLabels {
+		if v, ok := labels[sl.key]; ok && (sl.value == "" || sl.value == v) {
+			return "operator runtime state (" + sl.key + ")", true
+		}
 	}
 	if domain, ok := managedByOperatorLabel(labels, det.operatorGroups); ok {
 		return "managed by operator (" + domain + ")", true

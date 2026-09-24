@@ -38,6 +38,10 @@ A resource is managed, and not reported, if any of these is true.
    - It is a cert-manager Secret: a TLS Secret issued from a Certificate
      (annotation `cert-manager.io/certificate-name`), or PKI such as ACME account
      keys and the webhook CA (label `app.kubernetes.io/managed-by=cert-manager`).
+   - It is a known operator's runtime-state object, matched by a distinctive
+     label: for example Stakater Reloader's meta-info ConfigMap
+     (`reloader.stakater.com/meta-info`) or liqo's telemetry-identity ConfigMap.
+     See `operatorStateLabels` in `internal/korphan/classify.go`.
 
 4. It is created by the control plane, the kubelet, or the distribution: Nodes,
    the `kubernetes` Service and Endpoints, `kube-root-ca.crt`, bootstrap and

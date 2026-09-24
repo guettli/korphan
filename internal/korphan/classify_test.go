@@ -327,6 +327,24 @@ func TestClassify(t *testing.T) {
 			managed: false,
 		},
 		{
+			name:    "Stakater Reloader meta-info ConfigMap is operator state",
+			u:       obj("ConfigMap", "monitoring", "reloader-meta-info", withLabels(map[string]string{"reloader.stakater.com/meta-info": "reloader"})),
+			gvk:     gvkOf("", "v1", "ConfigMap"),
+			managed: true,
+		},
+		{
+			name:    "liqo telemetry-identity ConfigMap is operator state (key=value)",
+			u:       obj("ConfigMap", "liqo", "telemetry-identity", withLabels(map[string]string{"app.kubernetes.io/name": "clusterid-telemetry-configmap"})),
+			gvk:     gvkOf("", "v1", "ConfigMap"),
+			managed: true,
+		},
+		{
+			name:    "a different app.kubernetes.io/name value stays orphan",
+			u:       obj("ConfigMap", "app", "settings", withLabels(map[string]string{"app.kubernetes.io/name": "my-app"})),
+			gvk:     gvkOf("", "v1", "ConfigMap"),
+			managed: false,
+		},
+		{
 			name:      "young ownerless Job is tolerated",
 			u:         obj("Job", "app", "run-123", createdAt(now.Add(-30*time.Minute))),
 			gvk:       gvkOf("batch", "v1", "Job"),
