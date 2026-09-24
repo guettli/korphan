@@ -39,8 +39,6 @@ type Options struct {
 	// debugging with `kubectl run` / `kubectl debug` creates ownerless Pods;
 	// those are fine briefly but must not become permanent residents.
 	MaxDebugPodAge time.Duration
-	// IgnoreKinds names additional kinds to treat as managed (case-insensitive).
-	IgnoreKinds []string
 	// IgnoreNameGlobs treats any resource whose name matches as managed.
 	IgnoreNameGlobs []string
 	// ManagerLabels / ManagerAnnotations register extra metadata keys whose mere
@@ -48,11 +46,6 @@ type Options struct {
 	// know natively).
 	ManagerLabels      []string
 	ManagerAnnotations []string
-	// DetectOperators, when true (the default), enables operator-ownership
-	// recognition: the Group/Kind skip list (defaultSkipKinds plus SkipKinds)
-	// and the operator-domain label heuristic. Both catch objects an operator
-	// reconciles without an ownerReference (e.g. liqo peering resources).
-	DetectOperators bool
 	// SkipKinds extends the built-in skip list with extra "group/Kind" (or bare
 	// "Kind" for the core group) tuples to treat as operator-owned.
 	SkipKinds []string
@@ -123,11 +116,11 @@ func Scan(ctx context.Context, cfg *rest.Config, opts Options) (*Result, error) 
 	}
 
 	res.Managers = detectManagers(lists, opts)
-	det := detectors{active: activeManagers(res.Managers)}
-	if opts.DetectOperators {
-		det.operatorGroups = operatorGroups(lists)
-		det.skipKinds = buildSkipKinds(opts.SkipKinds)
-		det.infraSecrets = collectInfraSecretRefs(ctx, dyn, lists)
+	det := detectors{
+		active:         activeManagers(res.Managers),
+		operatorGroups: operatorGroups(lists),
+		skipKinds:      buildSkipKinds(opts.SkipKinds),
+		infraSecrets:   collectInfraSecretRefs(ctx, dyn, lists),
 	}
 
 	for _, rl := range lists {

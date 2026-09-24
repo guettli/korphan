@@ -201,16 +201,10 @@ func TestClassify(t *testing.T) {
 			managed: true,
 		},
 		{
-			name:    "liqo Configuration is a real orphan",
-			u:       obj("Configuration", "liqo-tenant-x", "cluster", withLabels(map[string]string{"liqo.io/remote-cluster-id": "x"})),
-			gvk:     gvkOf("networking.liqo.io", "v1beta1", "Configuration"),
-			managed: false,
-		},
-		{
 			name:    "liqo CR recognized via the baked-in skip list (no labels)",
 			u:       obj("ForeignCluster", "", "hcloud"),
 			gvk:     gvkOf("core.liqo.io", "v1beta1", "ForeignCluster"),
-			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now, DetectOperators: true},
+			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now},
 			active:  nil,
 			managed: true,
 		},
@@ -221,14 +215,14 @@ func TestClassify(t *testing.T) {
 			name:    "hand-applied cert-manager Certificate (not on skip list) stays orphan",
 			u:       obj("Certificate", "app", "web"),
 			gvk:     gvkOf("cert-manager.io", "v1", "Certificate"),
-			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now, DetectOperators: true},
+			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now},
 			managed: false,
 		},
 		{
 			name:    "liqo CR recognized via operator-group label domain",
 			u:       obj("Configuration", "liqo-tenant-x", "cluster", withLabels(map[string]string{"liqo.io/remote-cluster-id": "x"})),
 			gvk:     gvkOf("networking.liqo.io", "v1beta1", "Configuration"),
-			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now, DetectOperators: true},
+			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now},
 			active:  nil,
 			managed: true,
 		},
@@ -238,28 +232,21 @@ func TestClassify(t *testing.T) {
 			name:    "hand-made Ingress with cert-manager consumer annotation stays orphan",
 			u:       obj("Ingress", "app", "web", withAnnotations(map[string]string{"cert-manager.io/cluster-issuer": "letsencrypt"})),
 			gvk:     gvkOf("networking.k8s.io", "v1", "Ingress"),
-			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now, DetectOperators: true},
+			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now},
 			managed: false,
 		},
 		{
 			name:    "liqo-reflected Secret recognized via offloading.liqo.io label",
 			u:       obj("Secret", "app", "reflected", withLabels(map[string]string{"offloading.liqo.io/origin": "hcloud"})),
 			gvk:     gvkOf("", "v1", "Secret"),
-			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now, DetectOperators: true},
+			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now},
 			managed: true,
 		},
 		{
 			name:    "hand-created Secret with only kubernetes.io label stays orphan",
 			u:       obj("Secret", "app", "hand-made", withLabels(map[string]string{"kubernetes.io/legacy-token-last-used": "2026-09-22"})),
 			gvk:     gvkOf("", "v1", "Secret"),
-			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now, DetectOperators: true},
-			managed: false,
-		},
-		{
-			name:    "operator detection disabled leaves liqo CR as orphan",
-			u:       obj("Configuration", "liqo-tenant-x", "cluster", withLabels(map[string]string{"liqo.io/remote-cluster-id": "x"})),
-			gvk:     gvkOf("networking.liqo.io", "v1beta1", "Configuration"),
-			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now, DetectOperators: false},
+			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now},
 			managed: false,
 		},
 		{
@@ -282,13 +269,6 @@ func TestClassify(t *testing.T) {
 			managed: false,
 		},
 		{
-			name:    "ignore-kind marks resource managed",
-			u:       obj("Secret", "app", "hand-made"),
-			gvk:     gvkOf("", "v1", "Secret"),
-			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now, IgnoreKinds: []string{"secret"}},
-			managed: true,
-		},
-		{
 			name:    "ignore-name-glob marks resource managed",
 			u:       obj("ConfigMap", "app", "tmp-scratch"),
 			gvk:     gvkOf("", "v1", "ConfigMap"),
@@ -307,7 +287,7 @@ func TestClassify(t *testing.T) {
 			u:            obj("Secret", "flux-system", "flux-system"),
 			gvk:          gvkOf("", "v1", "Secret"),
 			infraSecrets: map[string]bool{"flux-system/flux-system": true},
-			opts:         Options{MaxDebugPodAge: 2 * time.Hour, Now: now, DetectOperators: true},
+			opts:         Options{MaxDebugPodAge: 2 * time.Hour, Now: now},
 			managed:      true,
 		},
 		{
@@ -315,35 +295,35 @@ func TestClassify(t *testing.T) {
 			u:            obj("Secret", "flux-system", "sops-age"),
 			gvk:          gvkOf("", "v1", "Secret"),
 			infraSecrets: map[string]bool{"flux-system/sops-age": true},
-			opts:         Options{MaxDebugPodAge: 2 * time.Hour, Now: now, DetectOperators: true},
+			opts:         Options{MaxDebugPodAge: 2 * time.Hour, Now: now},
 			managed:      true,
 		},
 		{
 			name:    "cert-manager account key (managed-by=cert-manager) is managed",
 			u:       obj("Secret", "cert-manager", "letsencrypt-prod-key", withLabels(map[string]string{"app.kubernetes.io/managed-by": "cert-manager"})),
 			gvk:     gvkOf("", "v1", "Secret"),
-			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now, DetectOperators: true},
+			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now},
 			managed: true,
 		},
 		{
 			name:    "cert-manager webhook CA (managed-by=cert-manager-webhook) is managed",
 			u:       obj("Secret", "cert-manager", "cert-manager-webhook-ca", withLabels(map[string]string{"app.kubernetes.io/managed-by": "cert-manager-webhook"})),
 			gvk:     gvkOf("", "v1", "Secret"),
-			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now, DetectOperators: true},
+			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now},
 			managed: true,
 		},
 		{
 			name:    "Argo CD repository credential Secret is managed",
 			u:       obj("Secret", "argocd", "repo-x", withLabels(map[string]string{"argocd.argoproj.io/secret-type": "repository"})),
 			gvk:     gvkOf("", "v1", "Secret"),
-			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now, DetectOperators: true},
+			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now},
 			managed: true,
 		},
 		{
 			name:    "a hand-created Secret with managed-by=Helm-lookalike stays orphan",
 			u:       obj("Secret", "app", "hand-made", withLabels(map[string]string{"app.kubernetes.io/managed-by": "my-team"})),
 			gvk:     gvkOf("", "v1", "Secret"),
-			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now, DetectOperators: true},
+			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now},
 			managed: false,
 		},
 		{
@@ -367,12 +347,11 @@ func TestClassify(t *testing.T) {
 			if o.MaxDebugPodAge == 0 && o.Now.IsZero() {
 				o = opts
 			}
-			// Mirror Scan: operator inputs are only supplied when detection is on.
-			det := detectors{active: tc.active}
-			if o.DetectOperators {
-				det.operatorGroups = opGroups
-				det.skipKinds = buildSkipKinds(nil)
-				det.infraSecrets = tc.infraSecrets
+			det := detectors{
+				active:         tc.active,
+				operatorGroups: opGroups,
+				skipKinds:      buildSkipKinds(nil),
+				infraSecrets:   tc.infraSecrets,
 			}
 			managed, tolerated, reason := classify(tc.u, tc.gvk, det, o)
 			if managed != tc.managed {

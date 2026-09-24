@@ -40,14 +40,11 @@ type flags struct {
 	namespaces         []string
 	excludeNamespaces  []string
 	maxDebugPodAge     time.Duration
-	ignoreKinds        []string
 	ignoreNameGlobs    []string
 	managerLabels      []string
 	managerAnnotations []string
 	output             string
 	verbose            bool
-	failOnListErrors   bool
-	detectOperators    bool
 	skipKinds          []string
 }
 
@@ -90,15 +87,12 @@ func init() {
 	pf.StringSliceVarP(&f.namespaces, "namespace", "n", nil, "Restrict to these namespaces (comma-separated globs); cluster-scoped resources are skipped")
 	pf.StringSliceVar(&f.excludeNamespaces, "exclude-namespace", nil, "Skip these namespaces (comma-separated globs)")
 	pf.DurationVar(&f.maxDebugPodAge, "max-debug-pod-age", 2*time.Hour, "Tolerate an ownerless (debug) Pod or one-off Job younger than this; older ones are reported")
-	pf.StringSliceVar(&f.ignoreKinds, "ignore-kind", nil, "Additional kinds to treat as managed (comma-separated, case-insensitive)")
 	pf.StringSliceVar(&f.ignoreNameGlobs, "ignore-name-glob", nil, "Treat any resource whose name matches one of these globs as managed")
 	pf.StringSliceVar(&f.managerLabels, "manager-label", nil, "Extra label keys whose presence marks a resource as managed (for GitOps tools korphan does not know natively)")
 	pf.StringSliceVar(&f.managerAnnotations, "manager-annotation", nil, "Extra annotation keys whose presence marks a resource as managed")
-	pf.BoolVar(&f.detectOperators, "detect-operators", true, "Recognize operator-owned objects with no ownerReference: the Group/Kind skip list (liqo's CRDs), GitOps credential Secrets a source/decryption references, cert-manager runtime PKI, and core objects carrying an operator-domain label")
 	pf.StringSliceVar(&f.skipKinds, "skip-kind", nil, "Extra 'group/Kind' tuples to treat as operator-owned, on top of the built-in list (e.g. 'networking.liqo.io/Configuration')")
 	pf.StringVarP(&f.output, "output", "o", "table", "Output format: table or json")
 	pf.BoolVarP(&f.verbose, "verbose", "v", false, "Print the detected managers and scan totals to stderr")
-	pf.BoolVar(&f.failOnListErrors, "fail-on-list-errors", false, "Exit 3 if any resource type could not be listed (e.g. a broken aggregated API)")
 }
 
 func run(cmd *cobra.Command, _ []string) error {
@@ -123,11 +117,9 @@ func run(cmd *cobra.Command, _ []string) error {
 		Namespaces:         f.namespaces,
 		ExcludeNamespaces:  f.excludeNamespaces,
 		MaxDebugPodAge:     f.maxDebugPodAge,
-		IgnoreKinds:        f.ignoreKinds,
 		IgnoreNameGlobs:    f.ignoreNameGlobs,
 		ManagerLabels:      f.managerLabels,
 		ManagerAnnotations: f.managerAnnotations,
-		DetectOperators:    f.detectOperators,
 		SkipKinds:          f.skipKinds,
 	})
 	if err != nil {
@@ -158,9 +150,6 @@ func run(cmd *cobra.Command, _ []string) error {
 	// not override it.
 	if len(res.Orphans) > 0 {
 		os.Exit(exitOrphans)
-	}
-	if f.failOnListErrors && len(res.ListWarnings) > 0 {
-		os.Exit(exitError)
 	}
 	os.Exit(exitClean)
 	return nil

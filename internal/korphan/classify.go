@@ -393,20 +393,13 @@ func classify(u *unstructured.Unstructured, gvk schema.GroupVersionKind, det det
 		return true, false, r
 	}
 
-	// 4. Operator- or bootstrap-owned (gated by --detect-operators). Runs after
-	// the kube-internal check so control-plane objects keep their precise reason.
-	if opts.DetectOperators {
-		if r, ok := operatorOwned(u, gvk, labels, det); ok {
-			return true, false, r
-		}
+	// 4. Operator- or bootstrap-owned. Runs after the kube-internal check so
+	// control-plane objects keep their precise reason.
+	if r, ok := operatorOwned(u, gvk, labels, det); ok {
+		return true, false, r
 	}
 
-	// 5. User-supplied ignore rules.
-	for _, ik := range opts.IgnoreKinds {
-		if strings.EqualFold(ik, gvk.Kind) {
-			return true, false, "ignored kind"
-		}
-	}
+	// 5. User-supplied ignore rule.
 	if anyGlob(opts.IgnoreNameGlobs, u.GetName()) {
 		return true, false, "ignored name"
 	}

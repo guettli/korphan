@@ -64,7 +64,6 @@ of these hold:
    (`cert-manager.io/cluster-issuer` on a hand-made Ingress, metallb/traefik
    config), so keying on annotations would hide real orphans. The
    `kubernetes.io` / `k8s.io` / `helm.sh` convention domains never count.
-   `--detect-operators=false` turns off both signals (skip list included).
 4. **Control-plane internal** — it belongs to the set the api-server, kubelet,
    or distro create on their own and that no GitOps repo should own: Nodes, the
    `kubernetes` Service/Endpoints, `kube-root-ca.crt`, bootstrap & aggregated
@@ -103,11 +102,11 @@ korphan -n 'app-*,team-*' -o json
 # Treat a home-grown GitOps tool's label as "managed".
 korphan --manager-label 'mycorp.io/managed-by'
 
-# Accept the irreducible bootstrap secrets a fresh Flux install needs.
-korphan --ignore-name-glob 'flux-system,sops-age'
+# Ignore a resource by name (e.g. a bootstrap Secret you keep out of git).
+korphan --ignore-name-glob 'my-bootstrap-*'
 
-# Fail CI if a resource type could not even be listed (broken aggregated API).
-korphan --fail-on-list-errors
+# Treat an extra operator's custom-resource kinds as managed.
+korphan --skip-kind 'acme.example.com/Widget'
 ```
 
 Exit codes: **0** = no orphans, **1** = orphans found, **3** = error.
@@ -135,11 +134,8 @@ Usage:
 
 Flags:
       --context string               Name of the kubeconfig context to use
-      --detect-operators             Recognize operator-owned objects with no ownerReference: the Group/Kind skip list (liqo's CRDs), GitOps credential Secrets a source/decryption references, cert-manager runtime PKI, and core objects carrying an operator-domain label (default true)
       --exclude-namespace strings    Skip these namespaces (comma-separated globs)
-      --fail-on-list-errors          Exit 3 if any resource type could not be listed (e.g. a broken aggregated API)
   -h, --help                         help for korphan
-      --ignore-kind strings          Additional kinds to treat as managed (comma-separated, case-insensitive)
       --ignore-name-glob strings     Treat any resource whose name matches one of these globs as managed
       --kubeconfig string            Path to the kubeconfig file (default: $KUBECONFIG or ~/.kube/config)
       --manager-annotation strings   Extra annotation keys whose presence marks a resource as managed
