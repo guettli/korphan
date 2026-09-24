@@ -13,6 +13,7 @@ concurrency:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   release:
@@ -89,3 +90,16 @@ jobs:
             --title "${{ steps.check.outputs.new_tag }}" \
             --generate-notes \
             dist/*
+
+      - name: Log in to ghcr.io
+        if: steps.check.outputs.new_release == 'true'
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push container image
+        if: steps.check.outputs.new_release == 'true'
+        run: |
+          IMG="ghcr.io/${{ github.repository }}"
+          TAG="${{ steps.check.outputs.new_tag }}"
+          docker build -t "$IMG:$TAG" -t "$IMG:latest" .
+          docker push "$IMG:$TAG"
+          docker push "$IMG:latest"
