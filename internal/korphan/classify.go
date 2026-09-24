@@ -198,8 +198,7 @@ func detectManagers(lists []*metav1.APIResourceList, opts Options) []Manager {
 //
 // These are liqo's CRDs: liqo maintains them as cross-cluster peering state.
 // This is the one ecosystem-specific default baked in; extend it with
-// --skip-kind, and the whole operator step (this list included) is gated by
-// --detect-operators.
+// --skip-kind.
 var defaultSkipKinds = []schema.GroupKind{
 	{Group: groupLiqoCore, Kind: "ForeignCluster"},
 	{Group: groupLiqoAuth, Kind: "Identity"},

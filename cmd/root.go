@@ -58,7 +58,7 @@ var rootCmd = &cobra.Command{
 A resource counts as MANAGED when any of these hold:
   - it has an ownerReference (a controller or another resource created it);
   - it carries the tracking label/annotation of a GitOps tool that korphan
-    detects in the cluster (Flux, Argo CD, Fleet);
+    detects in the cluster (Flux, Argo CD, Fleet, Helm, cert-manager, ...);
   - it belongs to the built-in set of objects the control plane, kubelet, or
     api-server create on their own (Nodes, the kubernetes Service, bootstrap
     RBAC, root-CA ConfigMaps, static Pods, ...).

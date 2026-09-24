@@ -1,115 +1,83 @@
-# korphan — find orphan (unmanaged) Kubernetes resources
+# korphan — find unmanaged Kubernetes resources
 
-`korphan` lists resources in a Kubernetes cluster that are managed by **neither
-a controller nor a GitOps tool**. In a GitOps-managed cluster every object
-should be traceable to a source of truth; anything else was created out-of-band
-(a `kubectl apply`, a `kubectl edit`, a leftover from a deleted operator) and is
-exactly what this tool surfaces.
+korphan lists resources that are managed by neither a controller nor a GitOps
+tool, and exits non-zero if it finds any. Run it in CI or a cron job to catch
+resources that were created by hand and are not in git.
 
-It exits non-zero when it finds any, so it fits straight into CI or a periodic
-alarm: *"tell me the moment something unmanaged appears in my cluster."*
+## What counts as managed
 
-## What counts as "managed"
+A resource is managed, and not reported, if any of these is true.
 
-A resource is considered **managed** — and therefore *not* reported — when any
-of these hold:
+1. It has an ownerReference. A controller or another resource created it.
 
-1. **Owned** — it has an `ownerReference`. A controller (or another resource)
-   created it and owns its lifecycle.
-2. **Claimed by a GitOps tool** — it carries the tracking label/annotation of a
-   tool `korphan` detects in the cluster:
-   - **Flux** — `kustomize.toolkit.fluxcd.io/name`, `helm.toolkit.fluxcd.io/name`
-   - **Argo CD** — `argocd.argoproj.io/instance`, `argocd.argoproj.io/tracking-id`
-   - **Fleet** — `fleet.cattle.io/bundle-name`
-   - **Helm** — `meta.helm.sh/release-name` (also k3s' bundled charts)
-   - **Wrangler/objectset** — `objectset.rio.cattle.io/hash` (the k3s deploy &
-     helm controllers, Rancher)
+2. It carries the tracking label or annotation of a GitOps tool that is
+   installed in the cluster:
 
-   A built-in GitOps tool's labels only count when that tool is actually
-   **detected** in the cluster, so a stale label left behind by an uninstalled
-   tool cannot mask an orphan.
-3. **Reconciled by an operator** — many operators reconcile objects they never
-   set an `ownerReference` on (liqo's peering resources are the motivating
-   case). Two signals cover this:
-   - **an explicit `Group/Kind` skip list** — the operator's own custom-resource
-     kinds. korphan ships a built-in list of liqo's CRDs; extend it with
-     `--skip-kind 'group/Kind'`. Listing exact kinds (rather than trusting
-     "any custom resource is managed") keeps each skip a deliberate decision —
-     a hand-applied `Certificate` or `HTTPRoute` that is *not* on the list is
-     still reported.
+   - Flux: `kustomize.toolkit.fluxcd.io/name`, `helm.toolkit.fluxcd.io/name`
+   - Argo CD: `argocd.argoproj.io/instance`, `argocd.argoproj.io/tracking-id`
+   - Fleet: `fleet.cattle.io/bundle-name`
+   - Helm: `meta.helm.sh/release-name`
+   - Rancher / Wrangler: `objectset.rio.cattle.io/hash`
 
-     **Found an operator whose resources should be skipped by default?** If
-     korphan flags custom resources that a well-known operator owns and
-     reconciles (the way liqo owns its peering CRDs), please [open an issue or a
-     PR](https://github.com/guettli/korphan/issues) to add them to the built-in
-     list — see `defaultSkipKinds` in `internal/korphan/classify.go`. That way
-     everyone benefits and you don't have to carry the `--skip-kind` flags.
-   - **an operator-domain label** — a core object (Secret, RBAC, Deployment…)
-     carrying a **label** whose domain matches an installed operator's API
-     group, e.g. liqo stamps `liqo.io/managed` on what it creates. This is
-     keyed generically on the operator groups discovered in the cluster.
-   - **a GitOps bootstrap credential** — a Secret a GitOps controller
-     references as *its own* credential: a Flux source's `spec.secretRef` (the
-     git/registry deploy key) or a Flux `Kustomization`'s
-     `spec.decryption.secretRef` (the SOPS/age key), and Argo CD
-     repository/cluster Secrets. These are the credentials that read and decrypt
-     git — by construction they **cannot** live in git. korphan follows the
-     reference, so it works whatever the Secret is named.
-   - **cert-manager's generated runtime PKI** — the ACME account keys and the
-     webhook CA, which cert-manager stamps `app.kubernetes.io/managed-by=cert-manager`
-     (or `cert-manager-webhook`). Regenerable operator state, not git material.
+   For Flux, Argo CD and Fleet the labels only count when that tool is installed,
+   so a stale label left by an uninstalled tool does not hide an orphan.
 
-   **Annotations are deliberately not used**: operators routinely read a
-   user-authored annotation off a user-owned object without owning it
-   (`cert-manager.io/cluster-issuer` on a hand-made Ingress, metallb/traefik
-   config), so keying on annotations would hide real orphans. The
-   `kubernetes.io` / `k8s.io` / `helm.sh` convention domains never count.
-4. **Control-plane internal** — it belongs to the set the api-server, kubelet,
-   or distro create on their own and that no GitOps repo should own: Nodes, the
-   `kubernetes` Service/Endpoints, `kube-root-ca.crt`, bootstrap & aggregated
-   RBAC, API-server IP allocation (`IPAddress`, `ServiceCIDR`), coordination
-   Leases, static/mirror Pods, dynamically-provisioned PVs, helm release
-   storage Secrets, anything in the control-plane namespaces (`kube-system`,
-   `kube-public`, `kube-node-lease`), and k3s bootstrap resources
-   (`k3s.cattle.io`, `helm.cattle.io`). The virtual `metrics.k8s.io` API is
-   skipped entirely.
+3. It is reconciled by an operator that sets no ownerReference:
 
-**Debug Pods and one-off Jobs** are a special case: a bare (ownerless) Pod or
-`batch/Job` is tolerated while it is younger than `--max-debug-pod-age`
-(default 2h) — a human debugging with `kubectl run`/`kubectl debug`, or an
-automation firing a one-off Job, is fine — but one that outlives the grace
-period is reported.
+   - Its kind is on the skip list. korphan ships liqo's CRDs; add more with
+     `--skip-kind group/Kind`.
+   - It carries a label whose domain matches an installed operator's API group,
+     for example `liqo.io/managed`. Annotations are not used, because operators
+     often read an annotation off a resource they do not own (e.g.
+     `cert-manager.io/cluster-issuer` on a hand-made Ingress). The `kubernetes.io`,
+     `k8s.io` and `helm.sh` domains never count.
+   - It is a Secret a GitOps controller uses as its own credential: a Flux source
+     `secretRef` (git or registry key) or a Flux Kustomization decryption
+     `secretRef` (SOPS key), which cannot be stored in git; or an Argo CD
+     credential Secret (label `argocd.argoproj.io/secret-type`).
+   - It is a cert-manager Secret: a TLS Secret issued from a Certificate
+     (annotation `cert-manager.io/certificate-name`), or PKI such as ACME account
+     keys and the webhook CA (label `app.kubernetes.io/managed-by=cert-manager`).
 
-Everything else is an **orphan**.
+4. It is created by the control plane, the kubelet, or the distribution: Nodes,
+   the `kubernetes` Service and Endpoints, `kube-root-ca.crt`, bootstrap and
+   aggregated RBAC, `IPAddress` and `ServiceCIDR`, coordination Leases, static
+   Pods, dynamically provisioned PersistentVolumes, Helm release Secrets,
+   anything in `kube-system`, `kube-public` or `kube-node-lease`, and k3s
+   bootstrap resources (`k3s.cattle.io`, `helm.cattle.io`). The `metrics.k8s.io`
+   API is skipped.
 
-## Install / run
+An ownerless Pod or one-off Job younger than `--max-debug-pod-age` (default 2h)
+is tolerated. Everything else is reported.
 
-```terminal
+## Install
+
+```
 go run github.com/guettli/korphan@latest
 ```
 
-or download a binary from the [releases](https://github.com/guettli/korphan/releases).
+Or download a binary from the [releases](https://github.com/guettli/korphan/releases) page.
 
 ## Examples
 
-```terminal
-# Scan the current context; exit 1 if any orphan exists.
+```
+# Scan the current context.
 korphan
 
-# Only a few namespaces, as JSON, for a dashboard.
+# A few namespaces, as JSON.
 korphan -n 'app-*,team-*' -o json
 
-# Treat a home-grown GitOps tool's label as "managed".
+# Add a custom GitOps tool's label.
 korphan --manager-label 'mycorp.io/managed-by'
 
-# Ignore a resource by name (e.g. a bootstrap Secret you keep out of git).
+# Ignore a resource by name.
 korphan --ignore-name-glob 'my-bootstrap-*'
 
-# Treat an extra operator's custom-resource kinds as managed.
+# Treat another operator's custom resources as managed.
 korphan --skip-kind 'acme.example.com/Widget'
 ```
 
-Exit codes: **0** = no orphans, **1** = orphans found, **3** = error.
+Exit codes: 0 = none found, 1 = orphans found, 3 = error.
 
 ## Usage
 
@@ -120,7 +88,7 @@ korphan finds orphan (unmanaged) resources in a Kubernetes cluster.
 A resource counts as MANAGED when any of these hold:
   - it has an ownerReference (a controller or another resource created it);
   - it carries the tracking label/annotation of a GitOps tool that korphan
-    detects in the cluster (Flux, Argo CD, Fleet);
+    detects in the cluster (Flux, Argo CD, Fleet, Helm, cert-manager, ...);
   - it belongs to the built-in set of objects the control plane, kubelet, or
     api-server create on their own (Nodes, the kubernetes Service, bootstrap
     RBAC, root-CA ConfigMaps, static Pods, ...).
@@ -149,17 +117,14 @@ Flags:
 ```
 <!-- usage:end -->
 
+## Adding an operator to the skip list
+
+If korphan reports custom resources that a known operator owns and reconciles,
+add its `group/Kind` tuples to `defaultSkipKinds` in
+`internal/korphan/classify.go` and open a pull request, so other users get them
+too.
+
 ## Related
 
-- [dumpall](https://github.com/guettli/dumpall) — dump all Kubernetes resources into a directory tree (and diff them).
-- [check-conditions](https://github.com/guettli/check-conditions) — check `status.conditions` of all resources.
-
-## Feedback is welcome
-
-Please create an issue if you have a question or a feature request.
-
-In particular, if korphan reports custom resources that a well-known operator
-owns and reconciles — the way liqo owns its peering CRDs — please [open an issue
-or a PR](https://github.com/guettli/korphan/issues) to add that operator's
-`Group/Kind` tuples to the built-in skip list (`defaultSkipKinds` in
-`internal/korphan/classify.go`), so every user gets them out of the box.
+- [dumpall](https://github.com/guettli/dumpall): dump all Kubernetes resources into a directory tree.
+- [check-conditions](https://github.com/guettli/check-conditions): check `status.conditions` of all resources.
