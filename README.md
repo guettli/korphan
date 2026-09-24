@@ -12,9 +12,10 @@ the one exception, and it asks before writing — see [below](#ignoring-a-resour
 > a single read-only command (see [Install](#install)). I'd especially like to
 > hear about **false positives** (korphan flagged something a tool actually
 > manages — which tool stamped it?), **misses** (an obvious hand-made orphan it
-> stayed quiet about), or anything confusing in the output. Please
-> [open an issue](https://github.com/guettli/korphan/issues) — even a one-line
-> "ran it on my cluster, here's what it found" is useful.
+> stayed quiet about), or anything confusing in the output. Share what you find
+> in the [feedback discussion](https://github.com/guettli/korphan/discussions/5) —
+> even a one-line "ran it on my cluster, here's what it found" is useful. Bugs and
+> feature ideas fit best as [issues](https://github.com/guettli/korphan/issues).
 
 ## What counts as managed
 
