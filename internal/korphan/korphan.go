@@ -53,11 +53,18 @@ type Options struct {
 	Now time.Time
 }
 
+// IgnoreAnnotation, set on a resource with a non-empty value, exempts it from
+// the report; the value is the reason and is shown in the output. An empty value
+// does NOT exempt it -- the resource is reported as usual and a warning is
+// emitted, so an ignore without a reason can never pass silently.
+const IgnoreAnnotation = "korphan.guettli.github.io/ignore"
+
 // Orphan is one unmanaged resource.
 type Orphan struct {
 	Group     string        `json:"group"`
 	Version   string        `json:"version"`
 	Kind      string        `json:"kind"`
+	Resource  string        `json:"resource"` // the plural GVR resource, for patching
 	Namespace string        `json:"namespace"`
 	Name      string        `json:"name"`
 	Age       time.Duration `json:"-"`
@@ -85,6 +92,12 @@ type Result struct {
 	Types   int `json:"types"`
 	// Tolerated counts young debug Pods that were allowed.
 	Tolerated int `json:"tolerated"`
+	// Ignored counts resources exempted by a non-empty IgnoreAnnotation.
+	Ignored int `json:"ignored"`
+	// Warnings holds non-fatal problems worth surfacing loudly, e.g. an
+	// IgnoreAnnotation present but empty. Printed to stderr; they do not change
+	// the exit code.
+	Warnings []string `json:"warnings,omitempty"`
 	// ListWarnings holds per-resource listing failures (e.g. a broken
 	// aggregated API). They are surfaced loudly but do not, by default, change
 	// the exit code -- a flaky metrics API should not hide a real orphan.
@@ -186,6 +199,15 @@ func scanResource(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVe
 			continue
 		}
 		res.Scanned++
+
+		// A non-empty ignore reason exempts the resource entirely and is
+		// self-documenting on the object.
+		st, _ := ignoreAnnotationState(u.GetAnnotations())
+		if st == ignoreActive {
+			res.Ignored++
+			continue
+		}
+
 		managed, tolerated, reason := classify(u, gvk, det, opts)
 		if tolerated {
 			res.Tolerated++
@@ -194,11 +216,21 @@ func scanResource(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVe
 		if managed {
 			continue
 		}
+
+		// It is an orphan. An empty ignore annotation does NOT exempt it: warn so
+		// an ignore without a reason cannot pass silently, and report it anyway.
+		if st == ignoreEmpty {
+			res.Warnings = append(res.Warnings, fmt.Sprintf(
+				"%s %s/%s: %s is empty -- add a reason for it to take effect; reporting as unmanaged",
+				gvk.Kind, orNone(ns), u.GetName(), IgnoreAnnotation))
+		}
+
 		age := opts.Now.Sub(u.GetCreationTimestamp().Time)
 		res.Orphans = append(res.Orphans, Orphan{
 			Group:     gvk.Group,
 			Version:   gvk.Version,
 			Kind:      gvk.Kind,
+			Resource:  gvr.Resource,
 			Namespace: ns,
 			Name:      u.GetName(),
 			Age:       age,
@@ -270,6 +302,37 @@ func nsSelected(ns string, opts Options) bool {
 
 func hasVerb(verbs metav1.Verbs, want string) bool {
 	return slices.Contains(verbs, want)
+}
+
+// orNone renders an empty (cluster-scoped) namespace as "-".
+func orNone(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
+}
+
+type ignoreState int
+
+const (
+	ignoreNone   ignoreState = iota // no IgnoreAnnotation
+	ignoreActive                    // present with a non-blank reason
+	ignoreEmpty                     // present but blank -- not honored
+)
+
+// ignoreAnnotationState reports how a resource's IgnoreAnnotation should be
+// treated. A blank (or whitespace-only) value is ignoreEmpty: it does NOT exempt
+// the resource, so an ignore without a stated reason can never pass silently.
+func ignoreAnnotationState(annos map[string]string) (ignoreState, string) {
+	v, ok := annos[IgnoreAnnotation]
+	if !ok {
+		return ignoreNone, ""
+	}
+	reason := strings.TrimSpace(v)
+	if reason == "" {
+		return ignoreEmpty, ""
+	}
+	return ignoreActive, reason
 }
 
 func globMatch(pattern, s string) bool {

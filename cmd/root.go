@@ -14,6 +14,7 @@ import (
 
 	"github.com/guettli/korphan/internal/korphan"
 	"github.com/spf13/cobra"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
@@ -100,33 +101,21 @@ func run(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("invalid --output %q: want table or json", f.output)
 	}
 
-	loadRules := clientcmd.NewDefaultClientConfigLoadingRules()
-	if f.kubeconfig != "" {
-		loadRules.ExplicitPath = f.kubeconfig
-	}
-	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		loadRules,
-		&clientcmd.ConfigOverrides{CurrentContext: f.kubeContext},
-	).ClientConfig()
-	if err != nil {
-		return fmt.Errorf("load kubeconfig: %w", err)
-	}
-
-	ctx := context.Background()
-	res, err := korphan.Scan(ctx, cfg, korphan.Options{
-		Namespaces:         f.namespaces,
-		ExcludeNamespaces:  f.excludeNamespaces,
-		MaxDebugPodAge:     f.maxDebugPodAge,
-		IgnoreNameGlobs:    f.ignoreNameGlobs,
-		ManagerLabels:      f.managerLabels,
-		ManagerAnnotations: f.managerAnnotations,
-		SkipKinds:          f.skipKinds,
-	})
+	cfg, err := clientConfig()
 	if err != nil {
 		return err
 	}
 
-	// Listing warnings are always surfaced loudly on stderr.
+	ctx := context.Background()
+	res, err := korphan.Scan(ctx, cfg, scanOptions())
+	if err != nil {
+		return err
+	}
+
+	// Warnings and listing failures are always surfaced loudly on stderr.
+	for _, w := range res.Warnings {
+		fmt.Fprintln(os.Stderr, "WARNING:", w)
+	}
 	for _, w := range res.ListWarnings {
 		fmt.Fprintln(os.Stderr, "WARNING:", w)
 	}
@@ -166,8 +155,37 @@ func printSummary(w io.Writer, res *korphan.Result) {
 	if len(detected) > 0 {
 		managers = fmt.Sprint(detected)
 	}
-	fmt.Fprintf(w, "Scanned %d resources across %d types. GitOps managers detected: %s. Tolerated debug pods: %d. Orphans: %d.\n",
-		res.Scanned, res.Types, managers, res.Tolerated, len(res.Orphans))
+	fmt.Fprintf(w, "Scanned %d resources across %d types. GitOps managers detected: %s. Tolerated: %d. Ignored: %d. Orphans: %d.\n",
+		res.Scanned, res.Types, managers, res.Tolerated, res.Ignored, len(res.Orphans))
+}
+
+// clientConfig builds the REST config from the shared kubeconfig/context flags.
+func clientConfig() (*rest.Config, error) {
+	loadRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	if f.kubeconfig != "" {
+		loadRules.ExplicitPath = f.kubeconfig
+	}
+	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		loadRules,
+		&clientcmd.ConfigOverrides{CurrentContext: f.kubeContext},
+	).ClientConfig()
+	if err != nil {
+		return nil, fmt.Errorf("load kubeconfig: %w", err)
+	}
+	return cfg, nil
+}
+
+// scanOptions maps the shared flags to a korphan.Options.
+func scanOptions() korphan.Options {
+	return korphan.Options{
+		Namespaces:         f.namespaces,
+		ExcludeNamespaces:  f.excludeNamespaces,
+		MaxDebugPodAge:     f.maxDebugPodAge,
+		IgnoreNameGlobs:    f.ignoreNameGlobs,
+		ManagerLabels:      f.managerLabels,
+		ManagerAnnotations: f.managerAnnotations,
+		SkipKinds:          f.skipKinds,
+	}
 }
 
 func printTable(w *os.File, res *korphan.Result) {

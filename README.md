@@ -54,6 +54,25 @@ A resource is managed, and not reported, if any of these is true.
 An ownerless Pod or one-off Job younger than `--max-debug-pod-age` (default 2h)
 is tolerated. Everything else is reported.
 
+## Ignoring a resource
+
+To exempt a specific resource, annotate it with a reason:
+
+```
+korphan.guettli.github.io/ignore: "rotated out-of-band by task k8s-mint-tenant-jwt"
+```
+
+korphan then skips it and shows the reason. The reason lives on the object, so
+`kubectl get -o yaml` explains the exemption. An **empty** value is not honored:
+the resource is still reported and korphan prints a warning, so an ignore without
+a stated reason never passes silently.
+
+`korphan ignore` writes this annotation for you: it walks the orphans and, for
+each, prompts for a reason (empty leaves it untouched). Unlike the scan it writes
+to the cluster, so it needs a context that can patch the listed resources. Only
+annotate a resource whose creation you control; for one an operator regenerates,
+add the annotation where it is created, not by hand.
+
 ## Install
 
 ```
@@ -103,6 +122,12 @@ Exit codes: 0 = no orphans, 1 = orphans found, 3 = error.
 
 Usage:
   korphan [flags]
+  korphan [command]
+
+Available Commands:
+  completion  Generate the autocompletion script for the specified shell
+  help        Help about any command
+  ignore      Walk the orphans and record a reason to ignore each (writes an annotation)
 
 Flags:
       --context string               Name of the kubeconfig context to use
@@ -118,6 +143,8 @@ Flags:
       --skip-kind strings            Extra 'group/Kind' tuples to treat as operator-owned, on top of the built-in list (e.g. 'networking.liqo.io/Configuration')
   -v, --verbose                      Print the detected managers and scan totals to stderr
       --version                      version for korphan
+
+Use "korphan [command] --help" for more information about a command.
 ```
 <!-- usage:end -->
 
