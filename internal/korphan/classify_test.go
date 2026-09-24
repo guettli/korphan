@@ -283,6 +283,23 @@ func TestClassify(t *testing.T) {
 			managed: true,
 		},
 		{
+			// A plain `helm install` stamps this annotation but is not tracked by
+			// git, so it is an orphan by default -- korphan does not exempt Helm.
+			name:    "helm-installed resource is an orphan by default",
+			u:       obj("Deployment", "app", "web", withAnnotations(map[string]string{"meta.helm.sh/release-name": "web"})),
+			gvk:     gvkOf("apps", "v1", "Deployment"),
+			managed: false,
+		},
+		{
+			// Users opt Helm back in through the generic --manager-annotation flag,
+			// which surfaces here as a custom manager matching the annotation.
+			name:    "helm-installed resource is managed when the release annotation is allowed",
+			u:       obj("Deployment", "app", "web", withAnnotations(map[string]string{"meta.helm.sh/release-name": "web"})),
+			gvk:     gvkOf("apps", "v1", "Deployment"),
+			active:  []Manager{{Name: "custom", Detected: true, Annotations: []string{"meta.helm.sh/release-name"}}},
+			managed: true,
+		},
+		{
 			name:         "GitOps credential Secret referenced by a flux source is managed",
 			u:            obj("Secret", "flux-system", "flux-system"),
 			gvk:          gvkOf("", "v1", "Secret"),
@@ -401,6 +418,19 @@ func TestDetectManagers(t *testing.T) {
 	}
 	if got["fleet"] {
 		t.Error("fleet should not be detected")
+	}
+	// Helm is deliberately NOT a built-in manager: a plain `helm install` is an
+	// out-of-band change, reported by default. Users opt it back in with
+	// --manager-annotation. Guard against the signature being re-added.
+	if _, ok := got["helm"]; ok {
+		t.Error("helm must not be a built-in manager")
+	}
+	for _, m := range managers {
+		for _, a := range m.Annotations {
+			if a == "meta.helm.sh/release-name" {
+				t.Errorf("built-in manager %q must not key on meta.helm.sh/release-name", m.Name)
+			}
+		}
 	}
 }
 

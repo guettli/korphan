@@ -16,11 +16,21 @@ A resource is managed, and not reported, if any of these is true.
    - Flux: `kustomize.toolkit.fluxcd.io/name`, `helm.toolkit.fluxcd.io/name`
    - Argo CD: `argocd.argoproj.io/instance`, `argocd.argoproj.io/tracking-id`
    - Fleet: `fleet.cattle.io/bundle-name`
-   - Helm: `meta.helm.sh/release-name`
    - Rancher / Wrangler: `objectset.rio.cattle.io/hash`
 
    For Flux, Argo CD and Fleet the labels only count when that tool is installed,
    so a stale label left by an uninstalled tool does not hide an orphan.
+
+   You can extend this list with `--manager-label` and `--manager-annotation`,
+   whose keys mark a resource as managed. This is the generic escape hatch for
+   any tool korphan does not know natively. For example, a plain `helm install`
+   (as opposed to a GitOps-driven Flux `HelmRelease` or Argo CD `Application`) is
+   an out-of-band change that is not in git, so korphan reports it by default. If
+   you consider such releases managed, allow them with:
+
+   ```
+   korphan --manager-annotation 'meta.helm.sh/release-name'
+   ```
 
 3. It is reconciled by an operator that sets no ownerReference:
 
@@ -93,6 +103,9 @@ korphan -n 'app-*,team-*' -o json
 # Add a custom GitOps tool's label.
 korphan --manager-label 'mycorp.io/managed-by'
 
+# Treat plain `helm install` releases as managed (not reported).
+korphan --manager-annotation 'meta.helm.sh/release-name'
+
 # Ignore a resource by name.
 korphan --ignore-name-glob 'my-bootstrap-*'
 
@@ -111,7 +124,7 @@ korphan finds orphan (unmanaged) resources in a Kubernetes cluster.
 A resource counts as MANAGED when any of these hold:
   - it has an ownerReference (a controller or another resource created it);
   - it carries the tracking label/annotation of a GitOps tool that korphan
-    detects in the cluster (Flux, Argo CD, Fleet, Helm, cert-manager, ...);
+    detects in the cluster (Flux, Argo CD, Fleet, cert-manager, ...);
   - it belongs to the built-in set of objects the control plane, kubelet, or
     api-server create on their own (Nodes, the kubernetes Service, bootstrap
     RBAC, root-CA ConfigMaps, static Pods, ...).
@@ -135,7 +148,7 @@ Flags:
   -h, --help                         help for korphan
       --ignore-name-glob strings     Treat any resource whose name matches one of these globs as managed
       --kubeconfig string            Path to the kubeconfig file (default: $KUBECONFIG or ~/.kube/config)
-      --manager-annotation strings   Extra annotation keys whose presence marks a resource as managed
+      --manager-annotation strings   Extra annotation keys whose presence marks a resource as managed (e.g. 'meta.helm.sh/release-name' to treat helm-installed resources as managed)
       --manager-label strings        Extra label keys whose presence marks a resource as managed (for GitOps tools korphan does not know natively)
       --max-debug-pod-age duration   Tolerate an ownerless (debug) Pod or one-off Job younger than this; older ones are reported (default 2h0m0s)
   -n, --namespace strings            Restrict to these namespaces (comma-separated globs); cluster-scoped resources are skipped

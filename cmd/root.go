@@ -59,7 +59,7 @@ var rootCmd = &cobra.Command{
 A resource counts as MANAGED when any of these hold:
   - it has an ownerReference (a controller or another resource created it);
   - it carries the tracking label/annotation of a GitOps tool that korphan
-    detects in the cluster (Flux, Argo CD, Fleet, Helm, cert-manager, ...);
+    detects in the cluster (Flux, Argo CD, Fleet, cert-manager, ...);
   - it belongs to the built-in set of objects the control plane, kubelet, or
     api-server create on their own (Nodes, the kubernetes Service, bootstrap
     RBAC, root-CA ConfigMaps, static Pods, ...).
@@ -90,7 +90,7 @@ func init() {
 	pf.DurationVar(&f.maxDebugPodAge, "max-debug-pod-age", 2*time.Hour, "Tolerate an ownerless (debug) Pod or one-off Job younger than this; older ones are reported")
 	pf.StringSliceVar(&f.ignoreNameGlobs, "ignore-name-glob", nil, "Treat any resource whose name matches one of these globs as managed")
 	pf.StringSliceVar(&f.managerLabels, "manager-label", nil, "Extra label keys whose presence marks a resource as managed (for GitOps tools korphan does not know natively)")
-	pf.StringSliceVar(&f.managerAnnotations, "manager-annotation", nil, "Extra annotation keys whose presence marks a resource as managed")
+	pf.StringSliceVar(&f.managerAnnotations, "manager-annotation", nil, "Extra annotation keys whose presence marks a resource as managed (e.g. 'meta.helm.sh/release-name' to treat helm-installed resources as managed)")
 	pf.StringSliceVar(&f.skipKinds, "skip-kind", nil, "Extra 'group/Kind' tuples to treat as operator-owned, on top of the built-in list (e.g. 'networking.liqo.io/Configuration')")
 	pf.StringVarP(&f.output, "output", "o", "table", "Output format: table or json")
 	pf.BoolVarP(&f.verbose, "verbose", "v", false, "Print the detected managers and scan totals to stderr")
