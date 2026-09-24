@@ -15,14 +15,12 @@ const (
 	labelArgoInstance  = "argocd.argoproj.io/instance"
 	annoArgoTracking   = "argocd.argoproj.io/tracking-id"
 	labelFleetBundle   = "fleet.cattle.io/bundle-name"
-	annoHelmRelease    = "meta.helm.sh/release-name"
 	labelObjectsetHash = "objectset.rio.cattle.io/hash"
 	annoCertManager    = "cert-manager.io/certificate-name"
 
 	managerFlux        = "flux"
 	managerArgo        = "argocd"
 	managerFleet       = "fleet"
-	managerHelm        = "helm"
 	managerObjectset   = "objectset"
 	managerCertManager = "cert-manager"
 	managerCustom      = "custom"
@@ -130,13 +128,6 @@ var signatures = []managerSignature{
 		name:   managerFleet,
 		labels: []string{labelFleetBundle},
 		detect: func(g map[string]bool) bool { return g["fleet.cattle.io"] },
-	},
-	{
-		// Helm-installed resources (including k3s's helm-controller HelmCharts)
-		// carry this annotation. It is Helm-specific, so it needs no detection.
-		name:        managerHelm,
-		annotations: []string{annoHelmRelease},
-		detect:      func(map[string]bool) bool { return true },
 	},
 	{
 		// cert-manager issues TLS Secrets from a Certificate but, by default,
