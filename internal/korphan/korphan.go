@@ -21,6 +21,7 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
@@ -122,13 +123,11 @@ func Scan(ctx context.Context, cfg *rest.Config, opts Options) (*Result, error) 
 	}
 
 	res.Managers = detectManagers(lists, opts)
-	active := activeManagers(res.Managers)
-
-	var opGroups []string
-	var skipKinds map[schema.GroupKind]bool
+	det := detectors{active: activeManagers(res.Managers)}
 	if opts.DetectOperators {
-		opGroups = operatorGroups(lists)
-		skipKinds = buildSkipKinds(opts.SkipKinds)
+		det.operatorGroups = operatorGroups(lists)
+		det.skipKinds = buildSkipKinds(opts.SkipKinds)
+		det.infraSecrets = collectInfraSecretRefs(ctx, dyn, lists)
 	}
 
 	for _, rl := range lists {
@@ -153,7 +152,7 @@ func Scan(ctx context.Context, cfg *rest.Config, opts Options) (*Result, error) 
 			gvr := gv.WithResource(ar.Name)
 			gvk := gv.WithKind(ar.Kind)
 			res.Types++
-			if err := scanResource(ctx, dyn, gvr, gvk, ar.Namespaced, active, opGroups, skipKinds, opts, res); err != nil {
+			if err := scanResource(ctx, dyn, gvr, gvk, ar.Namespaced, det, opts, res); err != nil {
 				res.ListWarnings = append(res.ListWarnings,
 					fmt.Sprintf("list %s: %v", gvr.String(), err))
 			}
@@ -174,7 +173,7 @@ func Scan(ctx context.Context, cfg *rest.Config, opts Options) (*Result, error) 
 }
 
 func scanResource(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionResource,
-	gvk schema.GroupVersionKind, namespaced bool, active []Manager, operatorGroups []string, skipKinds map[schema.GroupKind]bool, opts Options, res *Result,
+	gvk schema.GroupVersionKind, namespaced bool, det detectors, opts Options, res *Result,
 ) error {
 	// A namespace filter restricts to namespaced resources; cluster-scoped ones
 	// are then out of scope. Namespaced resources are listed cluster-wide and
@@ -194,7 +193,7 @@ func scanResource(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVe
 			continue
 		}
 		res.Scanned++
-		managed, tolerated, reason := classify(u, gvk, active, operatorGroups, skipKinds, opts)
+		managed, tolerated, reason := classify(u, gvk, det, opts)
 		if tolerated {
 			res.Tolerated++
 			continue
@@ -215,6 +214,55 @@ func scanResource(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVe
 		})
 	}
 	return nil
+}
+
+// collectInfraSecretRefs returns the "ns/name" of every Secret a GitOps
+// controller references as its own credential: a Flux source's git/registry
+// secretRef and a Flux Kustomization's SOPS decryption secretRef. These are the
+// deploy key and the decryption key -- by construction they cannot live in git,
+// so korphan should not report them. Following the reference (instead of
+// matching names like "flux-system"/"sops-age") keeps this generic for any
+// Flux install.
+func collectInfraSecretRefs(ctx context.Context, dyn dynamic.Interface, lists []*metav1.APIResourceList) map[string]bool {
+	refs := map[string]bool{}
+	add := func(ns, name string) {
+		if name != "" {
+			refs[ns+"/"+name] = true
+		}
+	}
+	for _, rl := range lists {
+		if rl == nil {
+			continue
+		}
+		gv, err := schema.ParseGroupVersion(rl.GroupVersion)
+		if err != nil {
+			continue
+		}
+		var fieldPath []string
+		switch gv.Group {
+		case "source.toolkit.fluxcd.io":
+			fieldPath = []string{"spec", "secretRef", "name"}
+		case "kustomize.toolkit.fluxcd.io":
+			fieldPath = []string{"spec", "decryption", "secretRef", "name"}
+		default:
+			continue
+		}
+		for _, ar := range rl.APIResources {
+			if strings.Contains(ar.Name, "/") || !hasVerb(ar.Verbs, "list") {
+				continue
+			}
+			list, err := dyn.Resource(gv.WithResource(ar.Name)).List(ctx, metav1.ListOptions{})
+			if err != nil {
+				continue
+			}
+			for i := range list.Items {
+				u := &list.Items[i]
+				name, _, _ := unstructured.NestedString(u.Object, fieldPath...)
+				add(u.GetNamespace(), name)
+			}
+		}
+	}
+	return refs
 }
 
 func nsSelected(ns string, opts Options) bool {

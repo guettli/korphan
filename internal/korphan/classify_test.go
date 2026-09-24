@@ -60,13 +60,14 @@ func TestClassify(t *testing.T) {
 	opGroups := []string{"networking.liqo.io", "offloading.liqo.io", "authentication.liqo.io", "core.liqo.io", "cert-manager.io"}
 
 	tests := []struct {
-		name      string
-		u         *unstructured.Unstructured
-		gvk       schema.GroupVersionKind
-		active    []Manager
-		opts      Options
-		managed   bool
-		tolerated bool
+		name         string
+		u            *unstructured.Unstructured
+		gvk          schema.GroupVersionKind
+		active       []Manager
+		infraSecrets map[string]bool
+		opts         Options
+		managed      bool
+		tolerated    bool
 	}{
 		{
 			name:    "owned by controller is managed",
@@ -301,6 +302,63 @@ func TestClassify(t *testing.T) {
 			active:  []Manager{{Name: "custom", Detected: true, Labels: []string{"my.company/owned-by"}}},
 			managed: true,
 		},
+		{
+			name:         "GitOps credential Secret referenced by a flux source is managed",
+			u:            obj("Secret", "flux-system", "flux-system"),
+			gvk:          gvkOf("", "v1", "Secret"),
+			infraSecrets: map[string]bool{"flux-system/flux-system": true},
+			opts:         Options{MaxDebugPodAge: 2 * time.Hour, Now: now, DetectOperators: true},
+			managed:      true,
+		},
+		{
+			name:         "SOPS key referenced by a flux Kustomization is managed",
+			u:            obj("Secret", "flux-system", "sops-age"),
+			gvk:          gvkOf("", "v1", "Secret"),
+			infraSecrets: map[string]bool{"flux-system/sops-age": true},
+			opts:         Options{MaxDebugPodAge: 2 * time.Hour, Now: now, DetectOperators: true},
+			managed:      true,
+		},
+		{
+			name:    "cert-manager account key (managed-by=cert-manager) is managed",
+			u:       obj("Secret", "cert-manager", "letsencrypt-prod-key", withLabels(map[string]string{"app.kubernetes.io/managed-by": "cert-manager"})),
+			gvk:     gvkOf("", "v1", "Secret"),
+			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now, DetectOperators: true},
+			managed: true,
+		},
+		{
+			name:    "cert-manager webhook CA (managed-by=cert-manager-webhook) is managed",
+			u:       obj("Secret", "cert-manager", "cert-manager-webhook-ca", withLabels(map[string]string{"app.kubernetes.io/managed-by": "cert-manager-webhook"})),
+			gvk:     gvkOf("", "v1", "Secret"),
+			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now, DetectOperators: true},
+			managed: true,
+		},
+		{
+			name:    "Argo CD repository credential Secret is managed",
+			u:       obj("Secret", "argocd", "repo-x", withLabels(map[string]string{"argocd.argoproj.io/secret-type": "repository"})),
+			gvk:     gvkOf("", "v1", "Secret"),
+			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now, DetectOperators: true},
+			managed: true,
+		},
+		{
+			name:    "a hand-created Secret with managed-by=Helm-lookalike stays orphan",
+			u:       obj("Secret", "app", "hand-made", withLabels(map[string]string{"app.kubernetes.io/managed-by": "my-team"})),
+			gvk:     gvkOf("", "v1", "Secret"),
+			opts:    Options{MaxDebugPodAge: 2 * time.Hour, Now: now, DetectOperators: true},
+			managed: false,
+		},
+		{
+			name:      "young ownerless Job is tolerated",
+			u:         obj("Job", "app", "run-123", createdAt(now.Add(-30*time.Minute))),
+			gvk:       gvkOf("batch", "v1", "Job"),
+			managed:   false,
+			tolerated: true,
+		},
+		{
+			name:    "old ownerless Job is an orphan",
+			u:       obj("Job", "app", "run-123", createdAt(now.Add(-3*time.Hour))),
+			gvk:     gvkOf("batch", "v1", "Job"),
+			managed: false,
+		},
 	}
 
 	for _, tc := range tests {
@@ -309,16 +367,14 @@ func TestClassify(t *testing.T) {
 			if o.MaxDebugPodAge == 0 && o.Now.IsZero() {
 				o = opts
 			}
-			// Mirror Scan: operator groups and the skip list are only supplied
-			// when detection is on.
-			og := opGroups
-			var sk map[schema.GroupKind]bool
+			// Mirror Scan: operator inputs are only supplied when detection is on.
+			det := detectors{active: tc.active}
 			if o.DetectOperators {
-				sk = buildSkipKinds(nil)
-			} else {
-				og = nil
+				det.operatorGroups = opGroups
+				det.skipKinds = buildSkipKinds(nil)
+				det.infraSecrets = tc.infraSecrets
 			}
-			managed, tolerated, reason := classify(tc.u, tc.gvk, tc.active, og, sk, o)
+			managed, tolerated, reason := classify(tc.u, tc.gvk, det, o)
 			if managed != tc.managed {
 				t.Errorf("managed = %v, want %v (reason %q)", managed, tc.managed, reason)
 			}

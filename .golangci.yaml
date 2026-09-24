@@ -25,6 +25,7 @@ linters:
     - noinlineerr
     - wrapcheck
     - maintidx
+    - goconst
   settings:
     cyclop:
       max-complexity: 15
@@ -41,10 +42,6 @@ linters:
       - third_party$
       - builtin$
       - examples$
-    rules:
-      - linters:
-          - goconst
-        path: _test\.go
 formatters:
   enable:
     - gci

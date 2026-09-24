@@ -364,7 +364,17 @@ func activeManagers(managers []Manager) []Manager {
 //     (counted separately, neither managed nor an orphan).
 //   - reason:    a human-readable classification, shown for orphans (why it is
 //     flagged) and, in verbose mode, for managed resources (why it is not).
-func classify(u *unstructured.Unstructured, gvk schema.GroupVersionKind, active []Manager, operatorGroups []string, skipKinds map[schema.GroupKind]bool, opts Options) (managed, tolerated bool, reason string) {
+//
+// detectors bundles the cluster-derived inputs classify needs, computed once
+// per scan.
+type detectors struct {
+	active         []Manager                 // detected GitOps-tool signatures
+	operatorGroups []string                  // installed non-built-in API groups
+	skipKinds      map[schema.GroupKind]bool // Group/Kinds to treat as operator-owned
+	infraSecrets   map[string]bool           // "ns/name" of GitOps credential Secrets
+}
+
+func classify(u *unstructured.Unstructured, gvk schema.GroupVersionKind, det detectors, opts Options) (managed, tolerated bool, reason string) {
 	// 1. Owned by another resource (controller or plain owner reference).
 	if refs := u.GetOwnerReferences(); len(refs) > 0 {
 		owner := refs[0]
@@ -374,7 +384,7 @@ func classify(u *unstructured.Unstructured, gvk schema.GroupVersionKind, active 
 	labels, annos := u.GetLabels(), u.GetAnnotations()
 
 	// 2. Claimed by a detected GitOps manager.
-	if m, ok := managedByManager(labels, annos, active); ok {
+	if m, ok := managedByManager(labels, annos, det.active); ok {
 		return true, false, "managed by " + m
 	}
 
@@ -383,16 +393,11 @@ func classify(u *unstructured.Unstructured, gvk schema.GroupVersionKind, active 
 		return true, false, r
 	}
 
-	// 4. Operator-owned, either explicitly (a Kind on the skip list, e.g. liqo's
-	// peering CRDs) or by an operator-domain label an operator stamped on a core
-	// object it created. Both carry no ownerReference. Runs after the
-	// kube-internal check so control-plane objects keep their precise reason.
-	if skipKinds[gvk.GroupKind()] {
-		return true, false, "skipped operator kind (" + gvk.Group + "/" + gvk.Kind + ")"
-	}
-	if len(operatorGroups) > 0 {
-		if domain, ok := managedByOperatorLabel(labels, operatorGroups); ok {
-			return true, false, "managed by operator (" + domain + ")"
+	// 4. Operator- or bootstrap-owned (gated by --detect-operators). Runs after
+	// the kube-internal check so control-plane objects keep their precise reason.
+	if opts.DetectOperators {
+		if r, ok := operatorOwned(u, gvk, labels, det); ok {
+			return true, false, r
 		}
 	}
 
@@ -406,16 +411,48 @@ func classify(u *unstructured.Unstructured, gvk schema.GroupVersionKind, active 
 		return true, false, "ignored name"
 	}
 
-	// 6. Bare debug Pods within their grace age are tolerated.
-	if gvk.Kind == "Pod" && gvk.Group == "" {
+	// 6. Bare debug Pods/Jobs within their grace age are tolerated: a human
+	// debugging (`kubectl run`) or an automation firing a one-off Job creates
+	// ownerless objects that are fine briefly but must not become permanent.
+	if (gvk.Kind == "Pod" && gvk.Group == "") || (gvk.Kind == "Job" && gvk.Group == "batch") {
 		age := opts.Now.Sub(u.GetCreationTimestamp().Time)
 		if age < opts.MaxDebugPodAge {
-			return false, true, "debug pod within grace age"
+			return false, true, "young ownerless " + gvk.Kind + " (within grace age)"
 		}
-		return false, false, "unmanaged Pod older than --max-debug-pod-age"
+		return false, false, "ownerless " + gvk.Kind + " older than --max-debug-pod-age"
 	}
 
 	return false, false, "no owner, no GitOps manager"
+}
+
+// operatorOwned recognizes objects an operator or GitOps bootstrap owns but
+// leaves without an ownerReference:
+//   - a Kind on the skip list (e.g. liqo's peering CRDs);
+//   - a Secret a GitOps controller references as its own credential -- the git
+//     deploy key or the SOPS decryption key -- which by definition cannot live
+//     in git; likewise an Argo CD repository/cluster credential Secret;
+//   - cert-manager's generated runtime PKI (account keys, webhook CA), which it
+//     stamps with app.kubernetes.io/managed-by=cert-manager*;
+//   - a core object carrying a label in an installed operator's domain.
+func operatorOwned(u *unstructured.Unstructured, gvk schema.GroupVersionKind, labels map[string]string, det detectors) (string, bool) {
+	if det.skipKinds[gvk.GroupKind()] {
+		return "skipped operator kind (" + gvk.Group + "/" + gvk.Kind + ")", true
+	}
+	if gvk.Kind == kindSecret && gvk.Group == "" {
+		if det.infraSecrets[u.GetNamespace()+"/"+u.GetName()] {
+			return "GitOps bootstrap credential (referenced by a GitOps source/decryption)", true
+		}
+		if _, ok := labels["argocd.argoproj.io/secret-type"]; ok {
+			return "Argo CD credential", true
+		}
+	}
+	if mb := labels["app.kubernetes.io/managed-by"]; strings.HasPrefix(mb, "cert-manager") {
+		return "cert-manager runtime", true
+	}
+	if domain, ok := managedByOperatorLabel(labels, det.operatorGroups); ok {
+		return "managed by operator (" + domain + ")", true
+	}
+	return "", false
 }
 
 // managedByManager checks a resource's labels/annotations against the active

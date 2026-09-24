@@ -48,6 +48,16 @@ of these hold:
      carrying a **label** whose domain matches an installed operator's API
      group, e.g. liqo stamps `liqo.io/managed` on what it creates. This is
      keyed generically on the operator groups discovered in the cluster.
+   - **a GitOps bootstrap credential** — a Secret a GitOps controller
+     references as *its own* credential: a Flux source's `spec.secretRef` (the
+     git/registry deploy key) or a Flux `Kustomization`'s
+     `spec.decryption.secretRef` (the SOPS/age key), and Argo CD
+     repository/cluster Secrets. These are the credentials that read and decrypt
+     git — by construction they **cannot** live in git. korphan follows the
+     reference, so it works whatever the Secret is named.
+   - **cert-manager's generated runtime PKI** — the ACME account keys and the
+     webhook CA, which cert-manager stamps `app.kubernetes.io/managed-by=cert-manager`
+     (or `cert-manager-webhook`). Regenerable operator state, not git material.
 
    **Annotations are deliberately not used**: operators routinely read a
    user-authored annotation off a user-owned object without owning it
@@ -65,9 +75,10 @@ of these hold:
    (`k3s.cattle.io`, `helm.cattle.io`). The virtual `metrics.k8s.io` API is
    skipped entirely.
 
-**Debug Pods** are a special case: a bare (ownerless) Pod is tolerated while it
-is younger than `--max-debug-pod-age` (default 2h) — a human debugging with
-`kubectl run`/`kubectl debug` is fine — but a debug Pod that outlives the grace
+**Debug Pods and one-off Jobs** are a special case: a bare (ownerless) Pod or
+`batch/Job` is tolerated while it is younger than `--max-debug-pod-age`
+(default 2h) — a human debugging with `kubectl run`/`kubectl debug`, or an
+automation firing a one-off Job, is fine — but one that outlives the grace
 period is reported.
 
 Everything else is an **orphan**.
@@ -124,7 +135,7 @@ Usage:
 
 Flags:
       --context string               Name of the kubeconfig context to use
-      --detect-operators             Recognize operator-owned objects with no ownerReference: the built-in Group/Kind skip list (liqo's CRDs) plus core objects carrying an operator-domain label (default true)
+      --detect-operators             Recognize operator-owned objects with no ownerReference: the Group/Kind skip list (liqo's CRDs), GitOps credential Secrets a source/decryption references, cert-manager runtime PKI, and core objects carrying an operator-domain label (default true)
       --exclude-namespace strings    Skip these namespaces (comma-separated globs)
       --fail-on-list-errors          Exit 3 if any resource type could not be listed (e.g. a broken aggregated API)
   -h, --help                         help for korphan
@@ -133,7 +144,7 @@ Flags:
       --kubeconfig string            Path to the kubeconfig file (default: $KUBECONFIG or ~/.kube/config)
       --manager-annotation strings   Extra annotation keys whose presence marks a resource as managed
       --manager-label strings        Extra label keys whose presence marks a resource as managed (for GitOps tools korphan does not know natively)
-      --max-debug-pod-age duration   Tolerate an ownerless (debug) Pod younger than this; older ones are reported (default 2h0m0s)
+      --max-debug-pod-age duration   Tolerate an ownerless (debug) Pod or one-off Job younger than this; older ones are reported (default 2h0m0s)
   -n, --namespace strings            Restrict to these namespaces (comma-separated globs); cluster-scoped resources are skipped
   -o, --output string                Output format: table or json (default "table")
       --skip-kind strings            Extra 'group/Kind' tuples to treat as operator-owned, on top of the built-in list (e.g. 'networking.liqo.io/Configuration')
