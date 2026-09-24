@@ -4,6 +4,18 @@ korphan lists resources that are managed by neither a controller nor a GitOps
 tool, and exits non-zero if it finds any. Run it in CI or a cron job to catch
 resources that were created by hand and are not in git.
 
+The scan is **read-only**: it only lists resources and never changes the cluster,
+so it is safe to point at any context. (The optional `korphan ignore` command is
+the one exception, and it asks before writing — see [below](#ignoring-a-resource).)
+
+> **Feedback wanted.** korphan is young and I'm looking for testers. Trying it is
+> a single read-only command (see [Install](#install)). I'd especially like to
+> hear about **false positives** (korphan flagged something a tool actually
+> manages — which tool stamped it?), **misses** (an obvious hand-made orphan it
+> stayed quiet about), or anything confusing in the output. Please
+> [open an issue](https://github.com/guettli/korphan/issues) — even a one-line
+> "ran it on my cluster, here's what it found" is useful.
+
 ## What counts as managed
 
 A resource is managed, and not reported, if any of these is true.
