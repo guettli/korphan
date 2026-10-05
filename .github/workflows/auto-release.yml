@@ -69,13 +69,47 @@ jobs:
 
       - name: Build binaries
         if: steps.check.outputs.new_release == 'true'
+        # CGO_ENABLED=0 and -ldflags='-s -w' are not optional, and the
+        # Dockerfile in this repo has always used both -- the release binaries
+        # were the odd ones out.
+        #
+        # Without CGO_ENABLED=0, a linux/amd64 build on a linux runner links
+        # against glibc (net and os/user pull in cgo resolvers), so the binary
+        # requests /lib64/ld-linux-x86-64.so.2. On a musl distro that
+        # interpreter does not exist, execve fails with ENOENT, and the shell
+        # reports it as the thoroughly misleading "not found" with exit 127 --
+        # for a file that is sitting right there. guettli/gitops ran korphan
+        # from curlimages/curl (Alpine) on three clusters and lost 11 days of
+        # orphan detection to exactly that, with the download succeeding every
+        # time. A static binary is also the whole point of shipping a binary:
+        # it should run wherever it lands.
+        #
+        # -s -w drops the symbol table and DWARF: 49.6 MB -> 33.8 MB measured
+        # on linux/amd64, which matters when something fetches it on a
+        # schedule.
         run: |
           mkdir -p dist
-          GOOS=linux   GOARCH=amd64 go build -trimpath -o dist/korphan-linux-amd64   .
-          GOOS=linux   GOARCH=arm64 go build -trimpath -o dist/korphan-linux-arm64   .
-          GOOS=darwin  GOARCH=amd64 go build -trimpath -o dist/korphan-darwin-amd64  .
-          GOOS=darwin  GOARCH=arm64 go build -trimpath -o dist/korphan-darwin-arm64  .
-          GOOS=windows GOARCH=amd64 go build -trimpath -o dist/korphan-windows-amd64.exe .
+          export CGO_ENABLED=0
+          GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o dist/korphan-linux-amd64   .
+          GOOS=linux   GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o dist/korphan-linux-arm64   .
+          GOOS=darwin  GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o dist/korphan-darwin-amd64  .
+          GOOS=darwin  GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o dist/korphan-darwin-arm64  .
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o dist/korphan-windows-amd64.exe .
+
+      - name: Verify the linux binaries are static
+        if: steps.check.outputs.new_release == 'true'
+        # A regression here is invisible until something runs the binary on a
+        # musl distro, so assert it at build time rather than discovering it
+        # 11 days later in someone else's cluster.
+        run: |
+          for f in dist/korphan-linux-amd64 dist/korphan-linux-arm64; do
+            if file "$f" | grep -q "dynamically linked"; then
+              echo "::error::$f is dynamically linked; it will fail with ENOENT on musl (Alpine)." >&2
+              file "$f"
+              exit 1
+            fi
+            echo "ok: $f is $(file -b "$f" | cut -d, -f1-4)"
+          done
 
       - name: Generate checksums
         if: steps.check.outputs.new_release == 'true'
