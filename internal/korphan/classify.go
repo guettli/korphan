@@ -16,18 +16,16 @@ const (
 	annoArgoTracking   = "argocd.argoproj.io/tracking-id"
 	labelFleetBundle   = "fleet.cattle.io/bundle-name"
 	labelObjectsetHash = "objectset.rio.cattle.io/hash"
-	annoObjectsetID    = "objectset.rio.cattle.io/id"
-	annoObjectsetOwner = "objectset.rio.cattle.io/owner-gvk"
-	labelKappApp       = "kapp.k14s.io/app"
 	annoCertManager    = "cert-manager.io/certificate-name"
 
 	managerFlux        = "flux"
 	managerArgo        = "argocd"
 	managerFleet       = "fleet"
 	managerObjectset   = "objectset"
-	managerKapp        = "kapp"
 	managerCertManager = "cert-manager"
 	managerCustom      = "custom"
+
+	groupRBAC = "rbac.authorization.k8s.io"
 
 	nsDefault      = "default"
 	nameKubernetes = "kubernetes"
@@ -146,19 +144,9 @@ var signatures = []managerSignature{
 		// deploy controller (Addons), the k3s helm-controller, Fleet -- carries
 		// this hash label and is actively reconciled and pruned by that
 		// controller. That is controller management, so honor it always.
-		name:        managerObjectset,
-		labels:      []string{labelObjectsetHash},
-		annotations: []string{annoObjectsetID, annoObjectsetOwner},
-		detect:      func(map[string]bool) bool { return true },
-	},
-	{
-		// Carvel kapp stamps every resource of an app with this label. Like a
-		// plain `helm install`, a kapp CLI deploy is out-of-band, so the label
-		// only counts when kapp-controller (which deploys App CRs from git or
-		// a registry) is installed.
-		name:   managerKapp,
-		labels: []string{labelKappApp},
-		detect: func(g map[string]bool) bool { return g["kappctrl.k14s.io"] },
+		name:   managerObjectset,
+		labels: []string{labelObjectsetHash},
+		detect: func(map[string]bool) bool { return true },
 	},
 }
 
@@ -298,8 +286,9 @@ func operatorGroups(lists []*metav1.APIResourceList) []string {
 }
 
 // conventionDomain reports whether a label/annotation key domain is a
-// Kubernetes-wide convention (kubernetes.io, k8s.io, helm.sh families) rather
-// than an operator-ownership signal. Such keys appear on hand-created resources
+// Kubernetes-wide convention (kubernetes.io, k8s.io, helm.sh families, the
+// bare cattle.io parent of all Rancher groups) rather than an
+// operator-ownership signal. Such keys appear on hand-created resources
 // too, so they must never mark a resource as operator-managed.
 func conventionDomain(domain string) bool {
 	switch {
@@ -308,6 +297,11 @@ func conventionDomain(domain string) bool {
 	case domain == "k8s.io" || strings.HasSuffix(domain, ".k8s.io"):
 		return true
 	case domain == "helm.sh" || strings.HasSuffix(domain, ".helm.sh"):
+		return true
+	case domain == "cattle.io":
+		// The parent of every Rancher/k3s group. Rancher stamps
+		// cattle.io/creator=norman on objects a human made in its UI or API:
+		// that is out-of-band, not reconciliation.
 		return true
 	}
 	return false
@@ -465,7 +459,7 @@ func operatorOwned(u *unstructured.Unstructured, gvk schema.GroupVersionKind, la
 			return "operator runtime state (" + sl.key + ")", true
 		}
 	}
-	if rancherInstalled(det.operatorGroups) {
+	if gvk.Group == groupRBAC && rancherInstalled(det.operatorGroups) {
 		if r, ok := rancherOwned(labels); ok {
 			return r, true
 		}
