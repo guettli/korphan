@@ -29,9 +29,11 @@ A resource is managed, and not reported, if any of these is true.
    - Flux: `kustomize.toolkit.fluxcd.io/name`, `helm.toolkit.fluxcd.io/name`
    - Argo CD: `argocd.argoproj.io/instance`, `argocd.argoproj.io/tracking-id`
    - Fleet: `fleet.cattle.io/bundle-name`
-   - Rancher / Wrangler: `objectset.rio.cattle.io/hash`
+   - Rancher / Wrangler: `objectset.rio.cattle.io/hash`, `objectset.rio.cattle.io/id`,
+     `objectset.rio.cattle.io/owner-gvk`
+   - kapp-controller: `kapp.k14s.io/app`
 
-   For Flux, Argo CD and Fleet the labels only count when that tool is installed,
+   For Flux, Argo CD, Fleet and kapp-controller the labels only count when that tool is installed,
    so a stale label left by an uninstalled tool does not hide an orphan.
 
    You can extend this list with `--manager-label` and `--manager-annotation`,
@@ -61,6 +63,11 @@ A resource is managed, and not reported, if any of these is true.
    - It is a cert-manager Secret: a TLS Secret issued from a Certificate
      (annotation `cert-manager.io/certificate-name`), or PKI such as ACME account
      keys and the webhook CA (label `app.kubernetes.io/managed-by=cert-manager`).
+   - It is RBAC that Rancher reconciles from a role template binding, role
+     template or global role (`authz.cluster.cattle.io/*-owner*`,
+     `authz.management.cattle.io/gr-owner`, `<ns>_<binding>: membership-binding-owner`,
+     ...), or an object created through Rancher's Norman API
+     (`cattle.io/creator=norman`). Only when Rancher is installed.
    - It is a known operator's runtime-state object, matched by a distinctive
      label: for example Stakater Reloader's meta-info ConfigMap
      (`reloader.stakater.com/meta-info`) or liqo's telemetry-identity ConfigMap.
@@ -76,6 +83,13 @@ A resource is managed, and not reported, if any of these is true.
 
 An ownerless Pod or one-off Job younger than `--max-debug-pod-age` (default 2h)
 is tolerated. Everything else is reported.
+
+For each orphan, korphan prints **hints** on how it most likely got into the
+cluster, so you know where to look: a plain helm release, `kubectl apply`, an
+`app.kubernetes.io/managed-by` value, a kapp CLI app, and the field managers
+that wrote its spec. Hints never make a resource managed. The tool signals are
+shared with [kubenorm](https://github.com/guettli/kubenorm), which shows the
+same list when it diffs objects.
 
 ## Ignoring a resource
 

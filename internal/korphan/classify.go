@@ -16,12 +16,16 @@ const (
 	annoArgoTracking   = "argocd.argoproj.io/tracking-id"
 	labelFleetBundle   = "fleet.cattle.io/bundle-name"
 	labelObjectsetHash = "objectset.rio.cattle.io/hash"
+	annoObjectsetID    = "objectset.rio.cattle.io/id"
+	annoObjectsetOwner = "objectset.rio.cattle.io/owner-gvk"
+	labelKappApp       = "kapp.k14s.io/app"
 	annoCertManager    = "cert-manager.io/certificate-name"
 
 	managerFlux        = "flux"
 	managerArgo        = "argocd"
 	managerFleet       = "fleet"
 	managerObjectset   = "objectset"
+	managerKapp        = "kapp"
 	managerCertManager = "cert-manager"
 	managerCustom      = "custom"
 
@@ -142,9 +146,19 @@ var signatures = []managerSignature{
 		// deploy controller (Addons), the k3s helm-controller, Fleet -- carries
 		// this hash label and is actively reconciled and pruned by that
 		// controller. That is controller management, so honor it always.
-		name:   managerObjectset,
-		labels: []string{labelObjectsetHash},
-		detect: func(map[string]bool) bool { return true },
+		name:        managerObjectset,
+		labels:      []string{labelObjectsetHash},
+		annotations: []string{annoObjectsetID, annoObjectsetOwner},
+		detect:      func(map[string]bool) bool { return true },
+	},
+	{
+		// Carvel kapp stamps every resource of an app with this label. Like a
+		// plain `helm install`, a kapp CLI deploy is out-of-band, so the label
+		// only counts when kapp-controller (which deploys App CRs from git or
+		// a registry) is installed.
+		name:   managerKapp,
+		labels: []string{labelKappApp},
+		detect: func(g map[string]bool) bool { return g["kappctrl.k14s.io"] },
 	},
 }
 
@@ -429,6 +443,7 @@ func classify(u *unstructured.Unstructured, gvk schema.GroupVersionKind, det det
 //     in git; likewise an Argo CD repository/cluster credential Secret;
 //   - cert-manager's generated runtime PKI (account keys, webhook CA), which it
 //     stamps with app.kubernetes.io/managed-by=cert-manager*;
+//   - RBAC that Rancher reconciles from role template bindings / global roles;
 //   - a core object carrying a label in an installed operator's domain.
 func operatorOwned(u *unstructured.Unstructured, gvk schema.GroupVersionKind, labels map[string]string, det detectors) (string, bool) {
 	if det.skipKinds[gvk.GroupKind()] {
@@ -448,6 +463,11 @@ func operatorOwned(u *unstructured.Unstructured, gvk schema.GroupVersionKind, la
 	for _, sl := range operatorStateLabels {
 		if v, ok := labels[sl.key]; ok && (sl.value == "" || sl.value == v) {
 			return "operator runtime state (" + sl.key + ")", true
+		}
+	}
+	if rancherInstalled(det.operatorGroups) {
+		if r, ok := rancherOwned(labels); ok {
+			return r, true
 		}
 	}
 	if domain, ok := managedByOperatorLabel(labels, det.operatorGroups); ok {

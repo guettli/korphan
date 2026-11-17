@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"runtime/debug"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -193,7 +194,7 @@ func printTable(w *os.File, res *korphan.Result) {
 		return
 	}
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAMESPACE\tGROUP/VERSION\tKIND\tNAME\tAGE\tREASON")
+	fmt.Fprintln(tw, "NAMESPACE\tGROUP/VERSION\tKIND\tNAME\tAGE\tREASON\tHINTS")
 	for _, o := range res.Orphans {
 		gv := o.Version
 		if o.Group != "" {
@@ -203,7 +204,11 @@ func printTable(w *os.File, res *korphan.Result) {
 		if ns == "" {
 			ns = "-"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", ns, gv, o.Kind, o.Name, o.AgeString, o.Reason)
+		hints := "-"
+		if len(o.Hints) > 0 {
+			hints = strings.Join(o.Hints, ", ")
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", ns, gv, o.Kind, o.Name, o.AgeString, o.Reason, hints)
 	}
 	tw.Flush()
 }
