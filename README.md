@@ -8,14 +8,18 @@ The scan is **read-only**: it only lists resources and never changes the cluster
 so it is safe to point at any context. (The optional `korphan ignore` command is
 the one exception, and it asks before writing — see [below](#ignoring-a-resource).)
 
-> **Feedback wanted.** korphan is young and I'm looking for testers. Trying it is
-> a single read-only command (see [Install](#install)). I'd especially like to
-> hear about **false positives** (korphan flagged something a tool actually
-> manages — which tool stamped it?), **misses** (an obvious hand-made orphan it
-> stayed quiet about), or anything confusing in the output. Share what you find
-> in the [feedback discussion](https://github.com/guettli/korphan/discussions/5) —
-> even a one-line "ran it on my cluster, here's what it found" is useful. Bugs and
-> feature ideas fit best as [issues](https://github.com/guettli/korphan/issues).
+> **korphan's rules now live in [konmon](https://github.com/guettli/konmon).**
+> The check [`orphaned`](https://github.com/guettli/konmon/blob/main/checks/orphaned.ts)
+> is korphan's classifier, and konmon can also record when an orphan appeared.
+> korphan keeps working, but its rules are frozen: false positives, misses and
+> new operators go to konmon (`konmon report false-positive --check orphaned
+> --resource TYPE`, or an [issue](https://github.com/guettli/konmon/issues)).
+>
+> ```console
+> go run github.com/guettli/konmon@latest check orphaned
+> ```
+>
+> See [Moving to konmon](#moving-to-konmon).
 
 ## What counts as managed
 
@@ -189,10 +193,37 @@ Use "korphan [command] --help" for more information about a command.
 
 ## Adding an operator to the skip list
 
-If korphan reports custom resources that a known operator owns and reconciles,
-add its `group/Kind` tuples to `defaultSkipKinds` in
-`internal/korphan/classify.go` and open a pull request, so other users get them
-too.
+korphan's rules are frozen. Add the operator to `liqo`/`defaultSkipKinds` in
+konmon's [`checks/orphaned.ts`](https://github.com/guettli/konmon/blob/main/checks/orphaned.ts)
+instead; until then, use `--skip-kind` here, or `--check-param
+'orphaned.skipKinds=["group/Kind"]'` in konmon.
+
+## Moving to konmon
+
+`konmon check orphaned` reports the same resources. The ignore annotation
+`korphan.guettli.github.io/ignore` works the same way.
+
+| korphan | konmon |
+|---|---|
+| `korphan` | `konmon check orphaned` |
+| exit code 1 if there are orphans | `konmon check orphaned -o json \| jq -e '.findings \| length == 0'` (the exit code of konmon counts only health findings; orphans are hygiene) |
+| `--context`, `--kubeconfig`, `-n`, `--exclude-namespace`, `-o json` | the same flags |
+| `--max-debug-pod-age 2h` | `--check-param orphaned.maxDebugPodAge=2h` |
+| `--manager-label K` | `--check-param 'orphaned.managerLabels=["K"]'` |
+| `--manager-annotation K` | `--check-param 'orphaned.managerAnnotations=["K"]'` |
+| `--skip-kind group/Kind` | `--check-param 'orphaned.skipKinds=["group/Kind"]'` |
+| `--ignore-name-glob G` | `--check-param 'orphaned.ignoreNames=["G"]'` |
+| `korphan ignore` | no equivalent: set the annotation yourself |
+
+Differences:
+
+- konmon counts a GitOps tool or operator as installed if it may read one of
+  its types; korphan uses API discovery. With RBAC that hides a tool's types,
+  konmon reports what that tool manages.
+- konmon reads only the metadata of Secrets, so it has no "kubectl apply" hint
+  for them, and no "manager" hints at all.
+- `konmon run` keeps the findings in a database: `konmon findings` shows when
+  an orphan appeared and was resolved.
 
 ## Related
 
