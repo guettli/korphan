@@ -70,6 +70,9 @@ type Orphan struct {
 	Age       time.Duration `json:"-"`
 	AgeString string        `json:"age"`
 	Reason    string        `json:"reason"`
+	// Hints say how the orphan most likely got into the cluster (plain helm
+	// release, kubectl apply, field managers), so the user knows where to look.
+	Hints []string `json:"hints,omitempty"`
 }
 
 // Manager is a GitOps tool korphan looks for. A manager is only honored (its
@@ -236,6 +239,7 @@ func scanResource(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVe
 			Age:       age,
 			AgeString: shortDuration(age),
 			Reason:    reason,
+			Hints:     orphanHints(u),
 		})
 	}
 	return nil

@@ -53,7 +53,7 @@ A resource is managed, and not reported, if any of these is true.
      for example `liqo.io/managed`. Annotations are not used, because operators
      often read an annotation off a resource they do not own (e.g.
      `cert-manager.io/cluster-issuer` on a hand-made Ingress). The `kubernetes.io`,
-     `k8s.io` and `helm.sh` domains never count.
+     `k8s.io`, `helm.sh` and bare `cattle.io` domains never count.
    - It is a Secret a GitOps controller uses as its own credential: a Flux source
      `secretRef` (git or registry key) or a Flux Kustomization decryption
      `secretRef` (SOPS key), which cannot be stored in git; or an Argo CD
@@ -61,6 +61,12 @@ A resource is managed, and not reported, if any of these is true.
    - It is a cert-manager Secret: a TLS Secret issued from a Certificate
      (annotation `cert-manager.io/certificate-name`), or PKI such as ACME account
      keys and the webhook CA (label `app.kubernetes.io/managed-by=cert-manager`).
+   - It is a Role, ClusterRole or binding that Rancher reconciles from a role
+     template binding, role template or global role
+     (`authz.cluster.cattle.io/*-owner*`, `authz.management.cattle.io/gr-owner`,
+     `<ns>_<binding>: membership-binding-owner`, ...). Only when Rancher is
+     installed. An object a human created in the Rancher UI
+     (`cattle.io/creator=norman`) is out-of-band and is reported.
    - It is a known operator's runtime-state object, matched by a distinctive
      label: for example Stakater Reloader's meta-info ConfigMap
      (`reloader.stakater.com/meta-info`) or liqo's telemetry-identity ConfigMap.
@@ -76,6 +82,13 @@ A resource is managed, and not reported, if any of these is true.
 
 An ownerless Pod or one-off Job younger than `--max-debug-pod-age` (default 2h)
 is tolerated. Everything else is reported.
+
+For each orphan, korphan prints **hints** on how it most likely got into the
+cluster, so you know where to look: a plain helm release, `kubectl apply`, an
+`app.kubernetes.io/managed-by` value, a kapp app, the Rancher UI, a stale
+Flux/Argo CD/Fleet label, and the field managers that wrote its spec. Hints never make a resource managed. The tool signals are
+shared with [kubenorm](https://github.com/guettli/kubenorm), which shows the
+same list when it diffs objects.
 
 ## Ignoring a resource
 

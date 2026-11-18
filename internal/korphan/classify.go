@@ -25,6 +25,8 @@ const (
 	managerCertManager = "cert-manager"
 	managerCustom      = "custom"
 
+	groupRBAC = "rbac.authorization.k8s.io"
+
 	nsDefault      = "default"
 	nameKubernetes = "kubernetes"
 	kindSecret     = "Secret"
@@ -284,8 +286,9 @@ func operatorGroups(lists []*metav1.APIResourceList) []string {
 }
 
 // conventionDomain reports whether a label/annotation key domain is a
-// Kubernetes-wide convention (kubernetes.io, k8s.io, helm.sh families) rather
-// than an operator-ownership signal. Such keys appear on hand-created resources
+// Kubernetes-wide convention (kubernetes.io, k8s.io, helm.sh families, the
+// bare cattle.io parent of all Rancher groups) rather than an
+// operator-ownership signal. Such keys appear on hand-created resources
 // too, so they must never mark a resource as operator-managed.
 func conventionDomain(domain string) bool {
 	switch {
@@ -294,6 +297,11 @@ func conventionDomain(domain string) bool {
 	case domain == "k8s.io" || strings.HasSuffix(domain, ".k8s.io"):
 		return true
 	case domain == "helm.sh" || strings.HasSuffix(domain, ".helm.sh"):
+		return true
+	case domain == "cattle.io":
+		// The parent of every Rancher/k3s group. Rancher stamps
+		// cattle.io/creator=norman on objects a human made in its UI or API:
+		// that is out-of-band, not reconciliation.
 		return true
 	}
 	return false
@@ -429,6 +437,7 @@ func classify(u *unstructured.Unstructured, gvk schema.GroupVersionKind, det det
 //     in git; likewise an Argo CD repository/cluster credential Secret;
 //   - cert-manager's generated runtime PKI (account keys, webhook CA), which it
 //     stamps with app.kubernetes.io/managed-by=cert-manager*;
+//   - RBAC that Rancher reconciles from role template bindings / global roles;
 //   - a core object carrying a label in an installed operator's domain.
 func operatorOwned(u *unstructured.Unstructured, gvk schema.GroupVersionKind, labels map[string]string, det detectors) (string, bool) {
 	if det.skipKinds[gvk.GroupKind()] {
@@ -448,6 +457,11 @@ func operatorOwned(u *unstructured.Unstructured, gvk schema.GroupVersionKind, la
 	for _, sl := range operatorStateLabels {
 		if v, ok := labels[sl.key]; ok && (sl.value == "" || sl.value == v) {
 			return "operator runtime state (" + sl.key + ")", true
+		}
+	}
+	if gvk.Group == groupRBAC && rancherInstalled(det.operatorGroups) {
+		if r, ok := rancherOwned(labels); ok {
+			return r, true
 		}
 	}
 	if domain, ok := managedByOperatorLabel(labels, det.operatorGroups); ok {
