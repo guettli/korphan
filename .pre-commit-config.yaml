@@ -8,10 +8,10 @@ repos:
   - id: check-added-large-files
   - id: check-merge-conflict
 
-- repo: https://github.com/gitleaks/gitleaks
-  rev: v8.24.0
+- repo: https://github.com/betterleaks/betterleaks
+  rev: v1.10.1
   hooks:
-    - id: gitleaks
+    - id: betterleaks
 
 - repo: local
   hooks:
