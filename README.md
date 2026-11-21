@@ -213,7 +213,7 @@ instead; until then, use `--skip-kind` here, or `--check-param
 | `--manager-annotation K` | `--check-param 'orphaned.managerAnnotations=["K"]'` |
 | `--skip-kind group/Kind` | `--check-param 'orphaned.skipKinds=["group/Kind"]'` |
 | `--ignore-name-glob G` | `--check-param 'orphaned.ignoreNames=["G"]'` |
-| `korphan ignore` | no equivalent: set the annotation yourself |
+| `korphan ignore` | `konmon triage orphaned --config konmon.yaml` (v0.0.45 or newer): one reason per orphan, written as ignore rules into the config file instead of annotations into the cluster |
 
 Differences:
 
