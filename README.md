@@ -206,7 +206,7 @@ instead; until then, use `--skip-kind` here, or `--check-param
 | korphan | konmon |
 |---|---|
 | `korphan` | `konmon check orphaned` |
-| exit code 1 if there are orphans | `konmon check orphaned -o json \| jq -e '.findings \| length == 0'` (the exit code of konmon counts only health findings; orphans are hygiene) |
+| exit code 1 if there are orphans | the same (konmon v0.0.44 or newer: a hygiene check named as an argument sets the exit code) |
 | `--context`, `--kubeconfig`, `-n`, `--exclude-namespace`, `-o json` | the same flags |
 | `--max-debug-pod-age 2h` | `--check-param orphaned.maxDebugPodAge=2h` |
 | `--manager-label K` | `--check-param 'orphaned.managerLabels=["K"]'` |
